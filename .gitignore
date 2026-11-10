@@ -1,0 +1,23 @@
+# Godot 4+ specific ignores
+.godot/
+.import/
+
+# Local portable engine & build artifacts (downloaded automatically by setup.ps1 / build.ps1)
+.engine/
+dist/
+builds/
+*.pck
+*.log
+*.tmp
+
+# Automatically downloaded CC0 binary assets (fetched via scripts/fetch_assets.py or setup.ps1)
+assets/downloaded/
+
+# OS / IDE files
+.DS_Store
+Thumbs.db
+*.swp
+.vscode/
+.idea/
+__pycache__/
+*.pyc
