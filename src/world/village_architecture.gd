@@ -336,6 +336,7 @@ static func _add_gable_prism(parent: Node3D, base_edge_center: Vector3, depth_z:
 		st.set_uv(Vector2(0.5, 0.0)); st.add_vertex(p_top)
 		st.set_uv(Vector2(1.0, 1.0)); st.add_vertex(p_right)
 
+	st.generate_tangents()
 	var m := ArrayMesh.new()
 	st.commit(m)
 	m.surface_set_material(0, mat)

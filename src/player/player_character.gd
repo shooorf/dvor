@@ -134,12 +134,12 @@ func _build_visual_character() -> void:
 
 func _setup_character_slots_and_materials(model: Node3D) -> void:
 	for n in model.find_children("*", "Node3D", true, false):
-		if n.name == "handslot.r":
+		if n.name in ["handslot.r", "handslot_r"]:
 			_hand_slot_r = n
 			for ch in n.get_children():
 				if ch is Node3D:
 					(ch as Node3D).visible = false
-		elif n.name == "handslot.l":
+		elif n.name in ["handslot.l", "handslot_l"]:
 			_hand_slot_l = n
 			for ch in n.get_children():
 				if ch is Node3D:

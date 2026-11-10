@@ -203,6 +203,14 @@ def build_download_plan(quality: str) -> tuple[list[tuple[str, Path]], set[Path]
         tasks.append((gltf_entry["url"], model_dir / "model.gltf"))
         for rel_path, info in gltf_entry.get("include", {}).items():
             tasks.append((info["url"], model_dir / rel_path))
+        if "Alpha" in mmeta:
+            alpha_dict = mmeta["Alpha"]
+            alpha_res = gltf_res if gltf_res in alpha_dict else ("1k" if "1k" in alpha_dict else next(iter(alpha_dict.keys())))
+            alpha_fmts = alpha_dict[alpha_res]
+            if "jpg" in alpha_fmts:
+                tasks.append((alpha_fmts["jpg"]["url"], model_dir / "textures" / "alpha.jpg"))
+            elif "png" in alpha_fmts:
+                tasks.append((alpha_fmts["png"]["url"], model_dir / "textures" / "alpha.png"))
 
     print("[4/4] Adding rigged characters and melee weapons (CC0)...")
     for fname, url in CHARACTER_GLBS.items():

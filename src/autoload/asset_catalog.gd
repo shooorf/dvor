@@ -138,6 +138,54 @@ const SANDBOX_ITEMS: Array[Dictionary] = [
 var _material_cache: Dictionary = {}
 var _scene_cache: Dictionary = {}
 var _submesh_cache: Dictionary = {}
+var _alpha_cutout_shader: Shader = null
+
+
+func _get_alpha_cutout_shader() -> Shader:
+	if _alpha_cutout_shader != null:
+		return _alpha_cutout_shader
+	var sh := Shader.new()
+	sh.code = """
+shader_type spatial;
+render_mode cull_disabled, diffuse_burley, specular_schlick_ggx;
+
+uniform sampler2D tex_alb : source_color, filter_linear_mipmap_anisotropic, repeat_enable;
+uniform sampler2D tex_alpha : hint_default_white, filter_linear_mipmap_anisotropic, repeat_enable;
+uniform sampler2D tex_nor : hint_normal, filter_linear_mipmap_anisotropic, repeat_enable;
+uniform sampler2D tex_arm : filter_linear_mipmap_anisotropic, repeat_enable;
+uniform float alpha_Threshold = 0.42;
+uniform float backlight_strength = 0.40;
+
+void vertex() {
+	// Мягкое покачивание листвы кустарников и травы на ветру
+	vec3 wp = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
+	float h_factor = clamp(VERTEX.y * 0.8, 0.0, 1.2);
+	float sway = sin(TIME * 1.8 + wp.x * 0.5 + wp.z * 0.4) * 0.025 * h_factor;
+	VERTEX.x += sway;
+	VERTEX.z += sway * 0.7;
+}
+
+void fragment() {
+	float a = texture(tex_alpha, UV).r;
+	vec3 alb = texture(tex_alb, UV).rgb;
+	ALBEDO = alb;
+	ALPHA = a;
+	ALPHA_SCISSOR_THRESHOLD = alpha_Threshold;
+	if (!FRONT_FACING) {
+		NORMAL = -NORMAL;
+	}
+	NORMAL_MAP = texture(tex_nor, UV).rgb;
+	NORMAL_MAP_DEPTH = 0.95;
+	vec3 arm = texture(tex_arm, UV).rgb;
+	AO = arm.r;
+	AO_LIGHT_AFFECT = 0.60;
+	ROUGHNESS = clamp(arm.g, 0.35, 0.95);
+	METALLIC = arm.b * 0.1;
+	BACKLIGHT = alb * backlight_strength;
+}
+"""
+	_alpha_cutout_shader = sh
+	return sh
 
 
 func get_pbr_material(
@@ -202,27 +250,98 @@ func get_pbr_material(
 
 
 ## Извлекает отдельные локальные Mesh-варианты из составных glTF-наборов растений Poly Haven
-## (например, grass_medium_01 содержит 17 отдельных кустиков травы, shrub_02 — 4 разных куста).
+## (с сохранением поворота узла glTF и сборкой пышных кустов из отдельных веток для shrub_*).
 func get_model_submeshes(res_path: String) -> Array[Mesh]:
 	if _submesh_cache.has(res_path):
 		return _submesh_cache[res_path]
 
-	var out: Array[Mesh] = []
+	var raw_meshes: Array[Mesh] = []
 	var inst := instantiate_model(res_path)
 	if inst != null:
-		var stack: Array[Node] = [inst]
-		while not stack.is_empty():
-			var cur: Node = stack.pop_back()
+		var queue: Array[Node] = [inst]
+		while not queue.is_empty():
+			var cur: Node = queue.pop_front()
 			if cur is MeshInstance3D:
 				var mi := cur as MeshInstance3D
 				if mi.mesh != null:
-					out.append(mi.mesh)
+					raw_meshes.append(_bake_submesh_basis_and_materials(mi))
 			for ch in cur.get_children():
-				stack.append(ch)
+				queue.append(ch)
 		inst.free()
+
+	var out: Array[Mesh] = raw_meshes
+	# В Poly Haven модели shrub_02 / shrub_03 / shrub_04 состоят из отдельных веточек;
+	# собираем из них полноценный густой многоствольный куст в качестве основного меша!
+	if ("/shrub_02/" in res_path or "/shrub_03/" in res_path or "/shrub_04/" in res_path) and not raw_meshes.is_empty():
+		var cluster := _build_bush_cluster_mesh(raw_meshes, res_path)
+		if cluster != null:
+			out = [cluster]
+			for rm in raw_meshes:
+				out.append(rm)
 
 	_submesh_cache[res_path] = out
 	return out
+
+
+func _bake_submesh_basis_and_materials(mi: MeshInstance3D) -> Mesh:
+	var src_mesh := mi.mesh
+	if src_mesh == null or src_mesh.get_surface_count() == 0:
+		return src_mesh
+	var basis_xform := Transform3D(mi.transform.basis, Vector3.ZERO)
+	var is_identity := basis_xform.basis.is_equal_approx(Basis.IDENTITY)
+	var has_override := mi.material_override != null
+	if is_identity and not has_override:
+		return src_mesh
+
+	var dst := ArrayMesh.new()
+	for s in range(src_mesh.get_surface_count()):
+		var mat := mi.material_override if has_override else src_mesh.surface_get_material(s)
+		if is_identity:
+			var arr := src_mesh.surface_get_arrays(s)
+			dst.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arr)
+		else:
+			var st := SurfaceTool.new()
+			st.append_from(src_mesh, s, basis_xform)
+			st.generate_tangents()
+			st.commit(dst)
+		if mat != null:
+			dst.surface_set_material(dst.get_surface_count() - 1, mat)
+	return dst
+
+
+func _build_bush_cluster_mesh(stems: Array[Mesh], res_path: String) -> ArrayMesh:
+	var st := SurfaceTool.new()
+	var mat: Material = null
+	for sm in stems:
+		if sm != null and sm.get_surface_count() > 0:
+			mat = sm.surface_get_material(0)
+			if mat != null:
+				break
+
+	var is_small_herb := ("/shrub_03/" in res_path or "/shrub_04/" in res_path)
+	var stem_count := 9 if is_small_herb else 6
+	var base_scale := 2.35 if "/shrub_03/" in res_path else (2.65 if "/shrub_04/" in res_path else 1.0)
+	var spread_r := 0.22 if is_small_herb else 0.18
+
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	for i in range(stem_count):
+		var src: Mesh = stems[i % stems.size()]
+		if src == null or src.get_surface_count() == 0:
+			continue
+		var yaw := float(i) * (TAU / float(stem_count)) + float(i % 2) * 0.28
+		var tilt := deg_to_rad(10.0 + float(i % 3) * 6.0)
+		var sc := base_scale * (0.88 + float(i % 3) * 0.11)
+		var b := (Basis(Vector3.UP, yaw) * Basis(Vector3.RIGHT, tilt)).scaled(Vector3(sc, sc, sc))
+		var offset := Vector3(cos(yaw) * spread_r, 0.0, sin(yaw) * spread_r)
+		for s in range(src.get_surface_count()):
+			st.append_from(src, s, Transform3D(b, offset))
+
+	st.generate_tangents()
+	var out_mesh := ArrayMesh.new()
+	st.commit(out_mesh)
+	if mat != null and out_mesh.get_surface_count() > 0:
+		out_mesh.surface_set_material(0, mat)
+	return out_mesh
 
 
 ## Инстанцирует только один вариант куста/растения из составного glTF (без соседних вариантов по оси X).
@@ -299,23 +418,92 @@ func _load_texture_safe(res_path: String) -> Texture2D:
 func _load_scene_safe(res_path: String) -> PackedScene:
 	if _scene_cache.has(res_path):
 		return _scene_cache[res_path]
+	var loaded_ps: PackedScene = null
 	if ResourceLoader.exists(res_path):
 		var res := load(res_path)
 		if res is PackedScene:
-			_scene_cache[res_path] = res
-			return res as PackedScene
-	var abs_path := ProjectSettings.globalize_path(res_path)
-	if FileAccess.file_exists(abs_path):
-		var doc := GLTFDocument.new()
-		var state := GLTFState.new()
-		var err := doc.append_from_file(abs_path, state)
-		if err == OK:
-			var scene_node := doc.generate_scene(state)
-			if scene_node != null:
-				var ps := PackedScene.new()
-				if ps.pack(scene_node) == OK:
+			loaded_ps = res as PackedScene
+	if loaded_ps == null:
+		var abs_path := ProjectSettings.globalize_path(res_path)
+		if FileAccess.file_exists(abs_path):
+			var doc := GLTFDocument.new()
+			var state := GLTFState.new()
+			var err := doc.append_from_file(abs_path, state)
+			if err == OK:
+				var scene_node := doc.generate_scene(state)
+				if scene_node != null:
+					var ps := PackedScene.new()
+					if ps.pack(scene_node) == OK:
+						loaded_ps = ps
 					scene_node.free()
-					_scene_cache[res_path] = ps
-					return ps
-				scene_node.free()
+	if loaded_ps != null:
+		loaded_ps = _upgrade_scene_alpha_materials(res_path, loaded_ps)
+		_scene_cache[res_path] = loaded_ps
+	return loaded_ps
+
+
+func _upgrade_scene_alpha_materials(res_path: String, ps: PackedScene) -> PackedScene:
+	var model_dir := res_path.get_base_dir()
+	var alpha_path := "%s/textures/alpha.jpg" % model_dir
+	if not FileAccess.file_exists(ProjectSettings.globalize_path(alpha_path)):
+		alpha_path = "%s/textures/alpha.png" % model_dir
+		if not FileAccess.file_exists(ProjectSettings.globalize_path(alpha_path)):
+			return ps
+
+	var inst := ps.instantiate()
+	if inst == null:
+		return ps
+
+	var alpha_tex := _load_texture_safe(alpha_path)
+	if alpha_tex == null:
+		inst.free()
+		return ps
+
+	var model_id := model_dir.get_file()
+	var diff_tex := _find_model_texture(model_dir, model_id, "diff")
+	var nor_tex := _find_model_texture(model_dir, model_id, "nor_gl")
+	var arm_tex := _find_model_texture(model_dir, model_id, "arm")
+
+	var sm := ShaderMaterial.new()
+	sm.shader = _get_alpha_cutout_shader()
+	sm.set_shader_parameter("tex_alpha", alpha_tex)
+	if diff_tex != null:
+		sm.set_shader_parameter("tex_alb", diff_tex)
+	if nor_tex != null:
+		sm.set_shader_parameter("tex_nor", nor_tex)
+	if arm_tex != null:
+		sm.set_shader_parameter("tex_arm", arm_tex)
+
+	var modified := false
+	var queue: Array[Node] = [inst]
+	while not queue.is_empty():
+		var cur: Node = queue.pop_front()
+		if cur is MeshInstance3D:
+			var mi := cur as MeshInstance3D
+			if mi.mesh != null and mi.mesh.get_surface_count() > 0:
+				var base_mat := mi.mesh.surface_get_material(0)
+				if base_mat is BaseMaterial3D and (base_mat as BaseMaterial3D).transparency != BaseMaterial3D.TRANSPARENCY_DISABLED:
+					if diff_tex == null and (base_mat as BaseMaterial3D).albedo_texture != null:
+						sm.set_shader_parameter("tex_alb", (base_mat as BaseMaterial3D).albedo_texture)
+					for s in range(mi.mesh.get_surface_count()):
+						mi.mesh.surface_set_material(s, sm)
+					modified = true
+		for ch in cur.get_children():
+			queue.append(ch)
+
+	if modified:
+		var new_ps := PackedScene.new()
+		if new_ps.pack(inst) == OK:
+			inst.free()
+			return new_ps
+	inst.free()
+	return ps
+
+
+func _find_model_texture(model_dir: String, model_id: String, map_suffix: String) -> Texture2D:
+	for res_tag in ["4k", "2k", "1k"]:
+		for ext in ["jpg", "png"]:
+			var candidate := "%s/textures/%s_%s_%s.%s" % [model_dir, model_id, map_suffix, res_tag, ext]
+			if FileAccess.file_exists(ProjectSettings.globalize_path(candidate)):
+				return _load_texture_safe(candidate)
 	return null

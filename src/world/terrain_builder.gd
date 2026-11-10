@@ -226,12 +226,14 @@ static func build_terrain_node(parent: Node3D) -> StaticBody3D:
 
 	var positions := PackedVector3Array()
 	var normals := PackedVector3Array()
+	var tangents := PackedFloat32Array()
 	var uvs := PackedVector2Array()
 	var colors := PackedColorArray()
 	var indices := PackedInt32Array()
 
 	positions.resize(vert_row * vert_row)
 	normals.resize(vert_row * vert_row)
+	tangents.resize(vert_row * vert_row * 4)
 	uvs.resize(vert_row * vert_row)
 	colors.resize(vert_row * vert_row)
 
@@ -241,8 +243,15 @@ static func build_terrain_node(parent: Node3D) -> StaticBody3D:
 		for ix in range(vert_row):
 			var wx := -TERRAIN_EXTENT + float(ix) * GRID_STEP
 			var wy := get_height(wx, wz)
+			var nrm := get_normal(wx, wz)
 			positions[v_idx] = Vector3(wx, wy, wz)
-			normals[v_idx] = get_normal(wx, wz)
+			normals[v_idx] = nrm
+			var t := (Vector3.RIGHT - nrm * nrm.x).normalized()
+			var t_base := v_idx * 4
+			tangents[t_base] = t.x
+			tangents[t_base + 1] = t.y
+			tangents[t_base + 2] = t.z
+			tangents[t_base + 3] = 1.0
 			uvs[v_idx] = Vector2(wx * 0.28, wz * 0.28)
 			colors[v_idx] = get_surface_weights(wx, wz)
 			v_idx += 1
@@ -270,6 +279,7 @@ static func build_terrain_node(parent: Node3D) -> StaticBody3D:
 	arrays.resize(Mesh.ARRAY_MAX)
 	arrays[Mesh.ARRAY_VERTEX] = positions
 	arrays[Mesh.ARRAY_NORMAL] = normals
+	arrays[Mesh.ARRAY_TANGENT] = tangents
 	arrays[Mesh.ARRAY_TEX_UV] = uvs
 	arrays[Mesh.ARRAY_COLOR] = colors
 	arrays[Mesh.ARRAY_INDEX] = indices

@@ -109,19 +109,19 @@ func _build_3d_backdrop() -> void:
 	var shrub_l := AssetCatalog.instantiate_single_variant("res://assets/downloaded/models/shrub_02/model.gltf", 0)
 	if shrub_l != null:
 		shrub_l.position = Vector3(-3.3, -0.34, -3.2)
-		shrub_l.scale = Vector3(1.35, 1.35, 1.35)
+		shrub_l.scale = Vector3(1.15, 1.15, 1.15)
 		add_child(shrub_l)
 
 	var shrub_r := AssetCatalog.instantiate_single_variant("res://assets/downloaded/models/shrub_03/model.gltf", 0)
 	if shrub_r != null:
 		shrub_r.position = Vector3(3.2, -0.34, -3.0)
-		shrub_r.scale = Vector3(1.35, 1.35, 1.35)
+		shrub_r.scale = Vector3(1.25, 1.25, 1.25)
 		add_child(shrub_r)
 
-	var nettle := AssetCatalog.instantiate_single_variant("res://assets/downloaded/models/nettle_plant/model.gltf", 0)
+	var nettle := AssetCatalog.instantiate_single_variant("res://assets/downloaded/models/nettle_plant/model.gltf", 4)
 	if nettle != null:
 		nettle.position = Vector3(-1.85, -0.32, -1.55)
-		nettle.scale = Vector3(1.4, 1.4, 1.4)
+		nettle.scale = Vector3(3.2, 3.2, 3.2)
 		add_child(nettle)
 
 	# Утоптанный круглый помост под персонажем
@@ -166,14 +166,14 @@ func _refresh_character_preview() -> void:
 	_preview_holder.add_child(mdl)
 
 	for n in mdl.find_children("*", "Node3D", true, false):
-		if n.name == "handslot.r":
+		if n.name in ["handslot.r", "handslot_r"]:
 			for ch in n.get_children():
 				if ch is Node3D:
 					(ch as Node3D).visible = false
 			var preview_wpn := "warhammer_2h" if cls == "barbarian" else ("sword_1h" if cls == "knight" else "axe_1h")
 			var wv := AssetCatalog.instantiate_weapon_visual(preview_wpn)
 			n.add_child(wv)
-		elif n.name == "handslot.l":
+		elif n.name in ["handslot.l", "handslot_l"]:
 			for ch in n.get_children():
 				if ch is Node3D:
 					(ch as Node3D).visible = (cls == "knight" and ch.name == "Round_Shield")
