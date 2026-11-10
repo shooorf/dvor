@@ -146,8 +146,8 @@ func _build_hud() -> void:
 		_make_glass_style(Color(0.06, 0.07, 0.10, 0.74), Color(0.30, 0.35, 0.45, 0.40), 10)
 	)
 	help_card.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
-	help_card.position = Vector2(-355, -172)
-	help_card.size = Vector2(331, 148)
+	help_card.position = Vector2(-372, -184)
+	help_card.size = Vector2(348, 160)
 	root.add_child(help_card)
 
 	var help_lbl := Label.new()
@@ -155,7 +155,8 @@ func _build_hud() -> void:
 		"[ЛКМ] Комбо-атака   [СКМ / R] Силовой удар\n"
 		+ "[F] Пинок (пробивает блок!)   [ПКМ] Блок / Прицел\n"
 		+ "[E] Взять оружие / предмет   [G] Метнуть\n"
-		+ "[Shift] Спринт   [Alt / C] Рывок   [Пробел] Прыжок\n"
+		+ "[Ctrl] Присесть (прятаться!)   [Shift] Спринт\n"
+		+ "[Alt / C] Рывок   [Пробел] Прыжок\n"
 		+ "[Q] Меню Песочницы   [Tab] Счёт   [Esc] Пауза"
 	)
 	help_lbl.add_theme_font_size_override("font_size", 12)
@@ -247,7 +248,7 @@ func _build_sandbox_menu() -> void:
 	vbox.add_child(footer)
 
 	var tip := Label.new()
-	tip.text = "Совет: впечатывайте врагов пинком [F] в стены и костёр, стройте заросли и кидайте пороховые бочки!"
+	tip.text = "Совет: прячьтесь в присяде [Ctrl] в высокой траве, крапиве и домах (ваш ник скрыт!), кидайте канистры и бочки!"
 	tip.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	tip.add_theme_font_size_override("font_size", 13)
 	tip.add_theme_color_override("font_color", Color(0.72, 0.78, 0.86))
@@ -408,6 +409,9 @@ func _update_local_character_crosshair(pc: PlayerCharacter, prompt: String) -> v
 	elif not prompt.is_empty():
 		_crosshair_lbl.text = "[ + ]"
 		_crosshair_lbl.modulate = Color(1.0, 0.92, 0.45)
+	elif pc.is_crouching:
+		_crosshair_lbl.text = "< · >"
+		_crosshair_lbl.modulate = Color(0.55, 0.95, 0.62, 0.92)
 	else:
 		_crosshair_lbl.text = "+"
 		_crosshair_lbl.modulate = Color(1.0, 1.0, 1.0, 0.88)
@@ -423,13 +427,14 @@ func _update_local_player_stats() -> void:
 	_stam_bar.value = pc.stamina
 	_death_banner.visible = pc.is_dead
 
+	var stealth_tag := "  •  [Скрыт]" if pc.is_crouching else ""
 	if not pc.carried_prop_name.is_empty():
-		_weapon_lbl.text = "В руках: Предмет (ЛКМ / G — Бросок)"
+		_weapon_lbl.text = "В руках: Предмет ([G] Бросок)%s" % stealth_tag
 	elif pc.equipped_weapon_id.is_empty():
-		_weapon_lbl.text = "Оружие: Рукопашный бой (+ Пинок [F])"
+		_weapon_lbl.text = "Оружие: Рукопашный бой (+ [F] Пинок)%s" % stealth_tag
 	elif AssetCatalog.WEAPON_DEFS.has(pc.equipped_weapon_id):
 		var title := String(AssetCatalog.WEAPON_DEFS[pc.equipped_weapon_id]["title"])
-		_weapon_lbl.text = "Оружие: %s ([G] Метнуть)" % title
+		_weapon_lbl.text = "Оружие: %s ([G] Метнуть)%s" % [title, stealth_tag]
 
 	var prompt := pc.get_look_interaction_prompt()
 	_prompt_lbl.text = prompt

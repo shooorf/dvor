@@ -11,8 +11,21 @@ $GodotTag = "4.7.2-stable"
 $TemplateVerDirName = "4.7.2.stable"
 $GodotConsole = Join-Path $RootDir ".engine\Godot_v$GodotTag`_win64_console.exe"
 $ManifestPath = Join-Path $RootDir "assets\downloaded\manifest.json"
+$ExpectedPackVersion = 2
 
-if ((-not (Test-Path $GodotConsole)) -or (-not (Test-Path $ManifestPath))) {
+$NeedSetup = (-not (Test-Path $GodotConsole)) -or (-not (Test-Path $ManifestPath))
+if (-not $NeedSetup) {
+    try {
+        $ManifestObj = Get-Content $ManifestPath -Raw | ConvertFrom-Json
+        if ($ManifestObj.pack_version -ne $ExpectedPackVersion) {
+            $NeedSetup = $true
+        }
+    } catch {
+        $NeedSetup = $true
+    }
+}
+
+if ($NeedSetup) {
     & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $RootDir "setup.ps1") -Quality $Quality
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }

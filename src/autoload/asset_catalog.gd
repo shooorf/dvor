@@ -1,27 +1,44 @@
 extends Node
-## Единый каталог ресурсов, PBR-материалов, оружия и объектов песочницы (ObjectRegistry).
+## Единый каталог ресурсов, 4K PBR-материалов, фотосканов оружия и объектов песочницы.
 ## Чтобы добавить новое оружие или объект в будущем — достаточно добавить запись в WEAPON_DEFS / SANDBOX_ITEMS.
 
 const WEAPON_DEFS: Dictionary = {
 	"sword_1h": {
-		"title": "Одноручный меч",
+		"title": "Старая шашка",
 		"grip": "1h",
-		"damage": 25.0,
-		"heavy_damage": 42.0,
-		"throw_damage": 52.0,
+		"damage": 26.0,
+		"heavy_damage": 44.0,
+		"throw_damage": 54.0,
 		"range": 2.45,
 		"knockback": 7.5,
-		"cooldown": 0.42,
+		"cooldown": 0.41,
 		"stamina_cost": 12.0,
 		"hit_sfx": "hit_blade",
-		"model_path": "res://assets/downloaded/weapons/Sword.glb",
-		"model_scale": Vector3(0.25, 0.25, 0.25),
-		"grip_offset": Vector3(0.0, -0.05, 0.0),
-		"grip_rot_deg": Vector3(0.0, 0.0, 0.0),
-		"accent_color": Color(0.78, 0.84, 0.94),
+		"model_path": "res://assets/downloaded/models/wooden_handle_saber/model.gltf",
+		"model_scale": Vector3(1.24, 1.24, 1.24),
+		"grip_offset": Vector3(0.0, 0.04, 0.0),
+		"grip_rot_deg": Vector3(0.0, 180.0, 0.0),
+		"accent_color": Color(0.80, 0.86, 0.94),
+	},
+	"axe_1h": {
+		"title": "Деревенский топор-колун",
+		"grip": "1h",
+		"damage": 30.0,
+		"heavy_damage": 49.0,
+		"throw_damage": 68.0,
+		"range": 2.32,
+		"knockback": 10.0,
+		"cooldown": 0.45,
+		"stamina_cost": 13.0,
+		"hit_sfx": "hit_blade",
+		"model_path": "res://assets/downloaded/models/wooden_axe_02/model.gltf",
+		"model_scale": Vector3(1.48, 1.48, 1.48),
+		"grip_offset": Vector3(0.0, 0.24, 0.0),
+		"grip_rot_deg": Vector3(0.0, 180.0, 0.0),
+		"accent_color": Color(0.88, 0.46, 0.34),
 	},
 	"mace_1h": {
-		"title": "Средневековая булава",
+		"title": "Кованая булава",
 		"grip": "1h",
 		"damage": 31.0,
 		"heavy_damage": 50.0,
@@ -38,7 +55,7 @@ const WEAPON_DEFS: Dictionary = {
 		"accent_color": Color(0.88, 0.72, 0.36),
 	},
 	"club_1h": {
-		"title": "Тяжёлая дубина",
+		"title": "Суковатая дубина",
 		"grip": "1h",
 		"damage": 28.0,
 		"heavy_damage": 46.0,
@@ -54,25 +71,8 @@ const WEAPON_DEFS: Dictionary = {
 		"grip_rot_deg": Vector3(0.0, 0.0, 0.0),
 		"accent_color": Color(0.68, 0.46, 0.26),
 	},
-	"axe_1h": {
-		"title": "Боевой топор",
-		"grip": "1h",
-		"damage": 29.0,
-		"heavy_damage": 48.0,
-		"throw_damage": 68.0,
-		"range": 2.30,
-		"knockback": 9.5,
-		"cooldown": 0.45,
-		"stamina_cost": 13.0,
-		"hit_sfx": "hit_blade",
-		"model_path": "res://assets/downloaded/weapons/Axe.glb",
-		"model_scale": Vector3(0.25, 0.25, 0.25),
-		"grip_offset": Vector3(0.0, -0.04, 0.0),
-		"grip_rot_deg": Vector3(0.0, 90.0, 0.0),
-		"accent_color": Color(0.85, 0.42, 0.34),
-	},
 	"claymore_2h": {
-		"title": "Двуручный клеймор",
+		"title": "Двуручный меч",
 		"grip": "2h",
 		"damage": 40.0,
 		"heavy_damage": 64.0,
@@ -89,7 +89,7 @@ const WEAPON_DEFS: Dictionary = {
 		"accent_color": Color(0.62, 0.82, 1.0),
 	},
 	"warhammer_2h": {
-		"title": "Боевой молот",
+		"title": "Тяжёлый молот-кувалда",
 		"grip": "2h",
 		"damage": 46.0,
 		"heavy_damage": 72.0,
@@ -115,27 +115,29 @@ const CHARACTER_PATHS: Dictionary = {
 
 ## Каталог объектов для спавна в режиме Песочницы (клавиша Q)
 const SANDBOX_ITEMS: Array[Dictionary] = [
-	{"id": "weapon:sword_1h", "category": "Оружие", "title": "Одноручный меч", "desc": "Быстрые комбо и точный бросок"},
-	{"id": "weapon:mace_1h", "category": "Оружие", "title": "Средневековая булава", "desc": "Фотоскан: дробящий урон и пробитие блока"},
-	{"id": "weapon:club_1h", "category": "Оружие", "title": "Тяжёлая дубина", "desc": "Сильное отбрасывание врагов"},
-	{"id": "weapon:axe_1h", "category": "Оружие", "title": "Боевой топор", "desc": "Повышенный урон при метании (68 ед.)"},
-	{"id": "weapon:claymore_2h", "category": "Оружие", "title": "Двуручный клеймор", "desc": "Широкие взмахи и вихревой удар"},
-	{"id": "weapon:warhammer_2h", "category": "Оружие", "title": "Боевой молот", "desc": "Фотоскан: сокрушительный двуручный молот"},
-	{"id": "prop:wooden_crate", "category": "Предметы", "title": "Деревянный ящик", "desc": "Можно схватить [E], швырнуть или разбить"},
-	{"id": "prop:wine_barrel", "category": "Предметы", "title": "Дубовая бочка", "desc": "Отлично катится от пинка [F] и сбивает с ног"},
-	{"id": "prop:explosive_barrel", "category": "Предметы", "title": "Пороховая бочка", "desc": "ВЗРЫВАЕТСЯ от удара или броска!"},
-	{"id": "prop:boulder", "category": "Предметы", "title": "Каменный валун", "desc": "Тяжёлый камень с огромным импульсом"},
-	{"id": "prop:treasure_chest", "category": "Предметы", "title": "Сундук с оружием", "desc": "Прочный сундук — при разрушении выпадает оружие"},
-	{"id": "prop:launchpad", "category": "Постройки", "title": "Пружинный трамплин", "desc": "Подбрасывает бойцов и предметы в воздух"},
-	{"id": "prop:wood_ramp", "category": "Постройки", "title": "Деревянная рампа", "desc": "Наклонный помост для прыжков и укрытий"},
-	{"id": "prop:thicket_hedge", "category": "Постройки", "title": "Непролазные заросли", "desc": "Густой кустарник — преграда и укрытие"},
-	{"id": "prop:fire_pit", "category": "Постройки", "title": "Огненная жаровня", "desc": "Костёр с физическим поджогом (пни туда друга!)"},
-	{"id": "prop:lantern_post", "category": "Постройки", "title": "Фонарный столб", "desc": "Тёплое динамическое освещение"},
-	{"id": "dummy:practice", "category": "Бойцы / NPC", "title": "Тренировочный манекен", "desc": "Боевая мишень с HP для проверки ударов и бросков"},
+	{"id": "weapon:axe_1h", "category": "Оружие", "title": "Деревенский топор-колун", "desc": "Фотоскан: мощный удар и 68 урона броском"},
+	{"id": "weapon:sword_1h", "category": "Оружие", "title": "Старая шашка", "desc": "Фотоскан: быстрые рубящие комбо и точный бросок"},
+	{"id": "weapon:mace_1h", "category": "Оружие", "title": "Кованая булава", "desc": "Фотоскан: дробящий урон по блоку"},
+	{"id": "weapon:club_1h", "category": "Оружие", "title": "Суковатая дубина", "desc": "Сильное отбрасывание врагов"},
+	{"id": "weapon:claymore_2h", "category": "Оружие", "title": "Двуручный меч", "desc": "Широкие взмахи и вихревой удар на 360°"},
+	{"id": "weapon:warhammer_2h", "category": "Оружие", "title": "Тяжёлый молот-кувалда", "desc": "Фотоскан: сокрушительный двуручный удар"},
+	{"id": "prop:wooden_crate", "category": "Предметы", "title": "Дощатый ящик", "desc": "Можно схватить [E], швырнуть или разбить в щепки"},
+	{"id": "prop:wine_barrel", "category": "Предметы", "title": "Деревянная бочка", "desc": "Отлично катится от пинка [F] и сбивает с ног"},
+	{"id": "prop:explosive_barrel", "category": "Предметы", "title": "Бочка с горючим", "desc": "ВЗРЫВАЕТСЯ от удара или броска!"},
+	{"id": "prop:jerrycan", "category": "Предметы", "title": "Канистра с бензином", "desc": "Лёгкая взрывоопасная канистра для дальнего броска!"},
+	{"id": "prop:boulder", "category": "Предметы", "title": "Лесной валун", "desc": "Тяжёлый камень с огромным физическим импульсом"},
+	{"id": "prop:treasure_chest", "category": "Предметы", "title": "Сундук с припасами", "desc": "При разрушении выпадает случайное оружие"},
+	{"id": "prop:launchpad", "category": "Постройки", "title": "Пружинный трамплин", "desc": "Подбрасывает бойцов на крыши домов"},
+	{"id": "prop:wood_ramp", "category": "Постройки", "title": "Дощатый настил-рампа", "desc": "Помост для запрыгивания через заборы и на чердаки"},
+	{"id": "prop:thicket_hedge", "category": "Постройки", "title": "Густой кустарник", "desc": "Живая изгородь — засада и укрытие"},
+	{"id": "prop:fire_pit", "category": "Постройки", "title": "Костровище", "desc": "Живой костёр с дымом и поджогом"},
+	{"id": "prop:lantern_post", "category": "Постройки", "title": "Уличный фонарь", "desc": "Фотоскан уличного столба с тёплым светом"},
+	{"id": "dummy:practice", "category": "Бойцы / NPC", "title": "Деревенское пугало-мишень", "desc": "Боевая мишень с HP для проверки ударов и бросков"},
 ]
 
 var _material_cache: Dictionary = {}
 var _scene_cache: Dictionary = {}
+var _submesh_cache: Dictionary = {}
 
 
 func get_pbr_material(
@@ -171,7 +173,7 @@ func get_pbr_material(
 		mat.ao_enabled = true
 		mat.ao_texture = arm_tex
 		mat.ao_texture_channel = BaseMaterial3D.TEXTURE_CHANNEL_RED
-		mat.ao_light_affect = 0.65
+		mat.ao_light_affect = 0.70
 
 		mat.roughness = clampf(roughness_mult, 0.05, 1.0)
 		mat.roughness_texture = arm_tex
@@ -184,19 +186,53 @@ func get_pbr_material(
 			mat.metallic_texture = arm_tex
 			mat.metallic_texture_channel = BaseMaterial3D.TEXTURE_CHANNEL_BLUE
 	else:
-		mat.roughness = clampf(0.82 * roughness_mult, 0.1, 1.0)
-		mat.metallic = maxf(metallic_override, 0.05)
+		mat.roughness = clampf(0.85 * roughness_mult, 0.1, 1.0)
+		mat.metallic = maxf(metallic_override, 0.02)
 
 	if triplanar:
 		mat.uv1_triplanar = true
 		mat.uv1_world_triplanar = true
-		mat.uv1_triplanar_sharpness = 4.0
+		mat.uv1_triplanar_sharpness = 4.5
 		mat.uv1_scale = uv_scale
 	else:
 		mat.uv1_scale = uv_scale
 
 	_material_cache[cache_key] = mat
 	return mat
+
+
+## Извлекает отдельные локальные Mesh-варианты из составных glTF-наборов растений Poly Haven
+## (например, grass_medium_01 содержит 17 отдельных кустиков травы, shrub_02 — 4 разных куста).
+func get_model_submeshes(res_path: String) -> Array[Mesh]:
+	if _submesh_cache.has(res_path):
+		return _submesh_cache[res_path]
+
+	var out: Array[Mesh] = []
+	var inst := instantiate_model(res_path)
+	if inst != null:
+		var stack: Array[Node] = [inst]
+		while not stack.is_empty():
+			var cur: Node = stack.pop_back()
+			if cur is MeshInstance3D:
+				var mi := cur as MeshInstance3D
+				if mi.mesh != null:
+					out.append(mi.mesh)
+			for ch in cur.get_children():
+				stack.append(ch)
+		inst.free()
+
+	_submesh_cache[res_path] = out
+	return out
+
+
+## Инстанцирует только один вариант куста/растения из составного glTF (без соседних вариантов по оси X).
+func instantiate_single_variant(res_path: String, variant_idx: int = 0) -> MeshInstance3D:
+	var meshes := get_model_submeshes(res_path)
+	if meshes.is_empty():
+		return null
+	var mi := MeshInstance3D.new()
+	mi.mesh = meshes[posmod(variant_idx, meshes.size())]
+	return mi
 
 
 func instantiate_model(res_path: String) -> Node3D:
@@ -221,7 +257,6 @@ func instantiate_weapon_visual(weapon_id: String) -> Node3D:
 		model.rotation_degrees = def["grip_rot_deg"]
 		root.add_child(model)
 	else:
-		# Процедурный фоллбэк, если ассеты не скачаны
 		var mesh_inst := MeshInstance3D.new()
 		var cyl := CylinderMesh.new()
 		cyl.top_radius = 0.03

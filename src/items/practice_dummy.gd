@@ -73,6 +73,8 @@ func _ready() -> void:
 		_hp_label.font_size = 34
 		_hp_label.outline_size = 10
 		_hp_label.pixel_size = 0.0055
+		_hp_label.visibility_range_end = 28.0
+		_hp_label.visibility_range_fade_mode = GeometryInstance3D.VISIBILITY_RANGE_FADE_SELF
 		add_child(_hp_label)
 		_refresh_label()
 
@@ -93,7 +95,8 @@ func _tint_dummy(node: Node, col: Color) -> void:
 			if orig is StandardMaterial3D:
 				var dup := (orig as StandardMaterial3D).duplicate() as StandardMaterial3D
 				dup.albedo_color = col
-				dup.roughness = 0.65
+				dup.roughness = 0.78
+				dup.metallic = 0.05
 				mi.material_override = dup
 	for ch in node.get_children():
 		_tint_dummy(ch, col)
@@ -169,8 +172,8 @@ func _physics_process(delta: float) -> void:
 		take_combat_hit(15.0, last_attacker_id, Vector3.ZERO, global_position + Vector3(0.0, 1.1, 0.0), "Впечатан в стену", true)
 		return
 
-	if global_position.y < -2.5:
-		global_position = home_position + Vector3(0.0, 0.25, 0.0)
+	if global_position.y < -3.0:
+		global_position = home_position + Vector3(0.0, 0.35, 0.0)
 		velocity = Vector3.ZERO
 
 	_sync_accum += delta

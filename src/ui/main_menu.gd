@@ -1,6 +1,7 @@
 extends Node3D
-## Главное меню с живой 3D-диорамой выбранного бойца на фоне закатного неба (4K HDRI),
-## выбором класса и цвета, настройкой графики RTX 4070 и запуском сетевой игры ENet UDP.
+## Главное меню с живой 3D-диорамой августовской опушки (4K HDRI вечерней дороги,
+## берёзы и сосны, фотосканированные кусты, лавочка и шейдерный костёр),
+## выбором персонажа, настройкой графики RTX 4070 и запуском сетевой игры ENet UDP.
 
 var _turntable: Node3D = null
 var _preview_holder: Node3D = null
@@ -28,7 +29,7 @@ func _ready() -> void:
 
 func _process(delta: float) -> void:
 	if _turntable != null:
-		_turntable.rotation.y += delta * 0.35
+		_turntable.rotation.y += delta * 0.32
 
 
 func _build_3d_backdrop() -> void:
@@ -39,30 +40,32 @@ func _build_3d_backdrop() -> void:
 	if hdri != null:
 		var sm := PanoramaSkyMaterial.new()
 		sm.panorama = hdri
+		sm.energy_multiplier = 1.02
 		sky.sky_material = sm
 	else:
 		var psm := ProceduralSkyMaterial.new()
-		psm.sky_top_color = Color(0.16, 0.30, 0.56)
-		psm.sky_horizon_color = Color(0.86, 0.58, 0.38)
+		psm.sky_top_color = Color(0.24, 0.44, 0.72)
+		psm.sky_horizon_color = Color(0.94, 0.74, 0.52)
 		sky.sky_material = psm
 	env.background_mode = Environment.BG_SKY
 	env.sky = sky
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
+	env.ambient_light_sky_contribution = 0.82
 	world_env.environment = env
 	add_child(world_env)
 
 	var sun := DirectionalLight3D.new()
-	sun.light_color = Color(1.0, 0.86, 0.70)
-	sun.light_energy = 2.1
-	sun.rotation_degrees = Vector3(-30.0, 42.0, 0.0)
+	sun.light_color = Color(1.0, 0.88, 0.72)
+	sun.light_energy = 2.15
+	sun.rotation_degrees = Vector3(-25.0, -48.0, 0.0)
 	sun.shadow_enabled = true
 	add_child(sun)
 
 	GraphicsSettings.register_scene_lighting(env, sun)
 
 	var cam := Camera3D.new()
-	cam.position = Vector3(0.0, 1.55, 4.15)
-	cam.rotation_degrees = Vector3(-6.5, 0.0, 0.0)
+	cam.position = Vector3(0.0, 1.52, 4.15)
+	cam.rotation_degrees = Vector3(-6.0, 0.0, 0.0)
 	cam.fov = 56.0
 	cam.current = true
 	add_child(cam)
@@ -71,50 +74,77 @@ func _build_3d_backdrop() -> void:
 	_turntable.position = Vector3(0.0, 0.0, 0.0)
 	add_child(_turntable)
 
-	# Сплошная лесная поляна и каменная стена/заросли на фоне меню (без пустоты вокруг подиума)
+	# Августовская луговая поляна
 	var ground := MeshInstance3D.new()
 	var gm := BoxMesh.new()
-	gm.size = Vector3(60.0, 0.4, 60.0)
-	gm.material = AssetCatalog.get_pbr_material("aerial_grass_rock", Vector3(0.22, 0.22, 0.22), true)
+	gm.size = Vector3(80.0, 0.4, 80.0)
+	gm.material = AssetCatalog.get_pbr_material("leafy_grass", Vector3(0.24, 0.24, 0.24), true)
 	ground.mesh = gm
-	ground.position = Vector3(0.0, -0.56, -4.0)
+	ground.position = Vector3(0.0, -0.52, -6.0)
 	add_child(ground)
 
-	for bg_spec in [
-		["res://assets/downloaded/nature/PineTree_1.glb", Vector3(-3.8, -0.36, -4.5), 2.6],
-		["res://assets/downloaded/nature/CommonTree_1.glb", Vector3(4.2, -0.36, -5.2), 2.8],
-		["res://assets/downloaded/nature/Willow_1.glb", Vector3(0.4, -0.36, -6.8), 3.0],
-		["res://assets/downloaded/models/shrub_02/model.gltf", Vector3(-2.4, -0.18, -2.6), 1.25],
-		["res://assets/downloaded/nature/BushBerries_1.glb", Vector3(2.9, -0.36, -2.8), 1.6],
-	]:
-		var bg_mdl := AssetCatalog.instantiate_model(String(bg_spec[0]))
-		if bg_mdl != null:
-			bg_mdl.position = bg_spec[1]
-			var s := float(bg_spec[2])
-			bg_mdl.scale = Vector3(s, s, s)
-			add_child(bg_mdl)
+	# Фоновые берёзы, сосна, деревянная лавочка и фотосканированный кустарник
+	if DisplayServer.get_name() != "headless":
+		var birch_mesh := RealisticFoliage._generate_tree_mesh(RealisticFoliage.TreeSpecies.BIRCH, 77)
+		for b_pos in [Vector3(-4.2, -0.32, -5.4), Vector3(4.8, -0.32, -6.8)]:
+			var bmi := MeshInstance3D.new()
+			bmi.mesh = birch_mesh
+			bmi.position = b_pos
+			bmi.scale = Vector3(0.82, 0.82, 0.82)
+			add_child(bmi)
 
-	# Каменный подиум
+		var pine_mesh := RealisticFoliage._generate_tree_mesh(RealisticFoliage.TreeSpecies.PINE, 88)
+		var pmi := MeshInstance3D.new()
+		pmi.mesh = pine_mesh
+		pmi.position = Vector3(0.6, -0.32, -8.5)
+		pmi.scale = Vector3(0.88, 0.88, 0.88)
+		add_child(pmi)
+
+	var bench := AssetCatalog.instantiate_model("res://assets/downloaded/models/painted_wooden_bench/model.gltf")
+	if bench != null:
+		bench.position = Vector3(-2.35, -0.32, -2.15)
+		bench.rotation_degrees.y = 32.0
+		add_child(bench)
+
+	var shrub_l := AssetCatalog.instantiate_single_variant("res://assets/downloaded/models/shrub_02/model.gltf", 0)
+	if shrub_l != null:
+		shrub_l.position = Vector3(-3.3, -0.34, -3.2)
+		shrub_l.scale = Vector3(1.35, 1.35, 1.35)
+		add_child(shrub_l)
+
+	var shrub_r := AssetCatalog.instantiate_single_variant("res://assets/downloaded/models/shrub_03/model.gltf", 0)
+	if shrub_r != null:
+		shrub_r.position = Vector3(3.2, -0.34, -3.0)
+		shrub_r.scale = Vector3(1.35, 1.35, 1.35)
+		add_child(shrub_r)
+
+	var nettle := AssetCatalog.instantiate_single_variant("res://assets/downloaded/models/nettle_plant/model.gltf", 0)
+	if nettle != null:
+		nettle.position = Vector3(-1.85, -0.32, -1.55)
+		nettle.scale = Vector3(1.4, 1.4, 1.4)
+		add_child(nettle)
+
+	# Утоптанный круглый помост под персонажем
 	var ped := MeshInstance3D.new()
 	var cyl := CylinderMesh.new()
-	cyl.top_radius = 1.45
-	cyl.bottom_radius = 1.65
-	cyl.height = 0.36
+	cyl.top_radius = 1.42
+	cyl.bottom_radius = 1.62
+	cyl.height = 0.32
 	cyl.radial_segments = 32
-	cyl.material = AssetCatalog.get_pbr_material("cobblestone_05", Vector3(0.4, 0.4, 0.4), true)
+	cyl.material = AssetCatalog.get_pbr_material("grass_path_2", Vector3(0.42, 0.42, 0.42), true)
 	ped.mesh = cyl
-	ped.position = Vector3(0.0, -0.18, 0.0)
+	ped.position = Vector3(0.0, -0.16, 0.0)
 	_turntable.add_child(ped)
 
-	# Фоновая жаровня справа от бойца
+	# Вечерний костёр справа от бойца (с новым шейдерным пламенем и дымом)
 	var fire_holder := Node3D.new()
-	fire_holder.position = Vector3(1.95, 0.0, -1.1)
+	fire_holder.position = Vector3(1.95, -0.28, -1.15)
 	add_child(fire_holder)
 	var fp := AssetCatalog.instantiate_model("res://assets/downloaded/models/stone_fire_pit/model.gltf")
 	if fp != null:
 		fp.scale = Vector3(0.85, 0.85, 0.85)
 		fire_holder.add_child(fp)
-	VfxHelper.attach_fire_effect(fire_holder, 2.6, 10.0, 0.85)
+	VfxHelper.attach_fire_effect(fire_holder, 2.5, 11.0, 0.85)
 
 	_preview_holder = Node3D.new()
 	_preview_holder.scale = Vector3(0.84, 0.84, 0.84)
@@ -154,6 +184,8 @@ func _refresh_character_preview() -> void:
 				var base_mat := mi.mesh.surface_get_material(0)
 				if base_mat is StandardMaterial3D:
 					var dup := (base_mat as StandardMaterial3D).duplicate() as StandardMaterial3D
+					dup.roughness = 0.76
+					dup.metallic = 0.08
 					if "Cape" in mi.name or "Hat" in mi.name or "Hood" in mi.name:
 						dup.albedo_color = col.lerp(Color.WHITE, 0.25)
 					mi.material_override = dup
@@ -168,7 +200,7 @@ func _refresh_character_preview() -> void:
 
 func _make_card_style(border_col: Color) -> StyleBoxFlat:
 	var sb := StyleBoxFlat.new()
-	sb.bg_color = Color(0.05, 0.07, 0.11, 0.86)
+	sb.bg_color = Color(0.05, 0.07, 0.10, 0.86)
 	sb.border_color = border_col
 	sb.set_border_width_all(1)
 	sb.set_corner_radius_all(14)
@@ -196,19 +228,19 @@ func _build_menu_ui() -> void:
 	root.add_child(header_box)
 
 	var title := Label.new()
-	title.text = "ЛЕСНАЯ ЦИТАДЕЛЬ — СЕТЕВАЯ ПЕСОЧНИЦА"
+	title.text = "ОКРАИНА: ПОСЁЛОК И ЛЕС — СЕТЕВАЯ ПЕСОЧНИЦА"
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	title.add_theme_font_size_override("font_size", 30)
+	title.add_theme_font_size_override("font_size", 29)
 	title.add_theme_color_override("font_color", Color(0.98, 0.90, 0.68))
 	title.add_theme_color_override("font_outline_color", Color(0.04, 0.04, 0.06, 0.95))
 	title.add_theme_constant_override("outline_size", 8)
 	header_box.add_child(title)
 
 	var sub := Label.new()
-	sub.text = "Рукопашный бой  •  Мечи, булавы и молоты  •  Спартанский пинок  •  Метание предметов и спавнер [Q]"
+	sub.text = "Восточная Европа (Август, 180×180 м)  •  Прятки в траве и домах [Ctrl]  •  Бой, пинок [F], метание [G] и спавнер [Q]"
 	sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	sub.add_theme_font_size_override("font_size", 15)
-	sub.add_theme_color_override("font_color", Color(0.78, 0.86, 0.96))
+	sub.add_theme_color_override("font_color", Color(0.82, 0.90, 0.84))
 	sub.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.9))
 	sub.add_theme_constant_override("outline_size", 5)
 	header_box.add_child(sub)
@@ -249,7 +281,7 @@ func _build_menu_ui() -> void:
 	_class_opt = OptionButton.new()
 	_class_opt.add_item("Рыцарь в латах", 0)
 	_class_opt.add_item("Северный варвар", 1)
-	_class_opt.add_item("Разбойник в капюшоне", 2)
+	_class_opt.add_item("Следопыт в капюшоне", 2)
 	var cls_keys := ["knight", "barbarian", "rogue"]
 	_class_opt.selected = max(0, cls_keys.find(String(NetworkManager.local_profile["char_class"])))
 	_class_opt.item_selected.connect(func(idx: int) -> void:
@@ -292,8 +324,8 @@ func _build_menu_ui() -> void:
 	var asset_info := Label.new()
 	asset_info.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	asset_info.add_theme_font_size_override("font_size", 12)
-	asset_info.add_theme_color_override("font_color", Color(0.68, 0.76, 0.86))
-	asset_info.text = "Ассеты: Poly Haven PBR/HDRI + KayKit + Quaternius (100% CC0)."
+	asset_info.add_theme_color_override("font_color", Color(0.68, 0.78, 0.84))
+	asset_info.text = "Ассеты: Poly Haven 4K PBR/HDRI + 3D-фотосканы + KayKit (100% CC0)."
 	lv.add_child(asset_info)
 
 	# Правая карточка: Подключение с друзьями
@@ -315,7 +347,7 @@ func _build_menu_ui() -> void:
 	rv.add_child(r_hdr)
 
 	var solo_btn := Button.new()
-	solo_btn.text = "▶  Одиночная песочница (Быстрый старт)"
+	solo_btn.text = "▶  Одиночная прогулка / Песочница"
 	solo_btn.custom_minimum_size = Vector2(0, 44)
 	solo_btn.pressed.connect(_on_solo_pressed)
 	rv.add_child(solo_btn)

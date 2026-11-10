@@ -1,7 +1,7 @@
 class_name PhysicsProp
 extends RigidBody3D
-## Интерактивный сетевой объект песочницы: ящики, обычные и взрывные бочки, валуны, сундуки,
-## пружинные трамплины, рампы, огненные жаровни и фонари.
+## Интерактивный сетевой объект песочницы: ящики, обычные и взрывные бочки, канистры с бензином,
+## валуны, сундуки, пружинные трамплины, рампы, кострище, уличные фонари и заросли.
 
 var prop_type: String = "wooden_crate"
 var max_hp: float = 60.0
@@ -31,6 +31,10 @@ func setup_from_spawn_data(data: Dictionary) -> void:
 	prop_type = String(data.get("prop_type", "wooden_crate"))
 	position = data.get("pos", Vector3.ZERO)
 	rotation = data.get("rot", Vector3.ZERO)
+
+
+func _is_explosive_prop() -> bool:
+	return prop_type in ["explosive_barrel", "jerrycan"]
 
 
 func _ready() -> void:
@@ -84,7 +88,7 @@ func _configure_by_type() -> void:
 			_add_gltf_or_cyl("res://assets/downloaded/models/wine_barrel_01/model.gltf", Vector3.ONE, Vector3.ZERO, 0.38, 0.88, "brown_planks_03", Color.WHITE)
 
 		"explosive_barrel":
-			display_title = "Пороховая бочка"
+			display_title = "Бочка с горючим"
 			mass = 24.0
 			max_hp = 26.0
 			destructible = true
@@ -92,11 +96,22 @@ func _configure_by_type() -> void:
 			throw_speed_mult = 0.96
 			phys_mat.bounce = 0.24
 			_add_cylinder_collider(0.39, 0.90, Vector3(0.0, 0.45, 0.0))
-			_add_gltf_or_cyl("res://assets/downloaded/models/wine_barrel_01/model.gltf", Vector3(1.02, 1.02, 1.02), Vector3.ZERO, 0.39, 0.90, "brown_planks_03", Color(1.0, 0.35, 0.30))
+			_add_gltf_or_cyl("res://assets/downloaded/models/barrel_03/model.gltf", Vector3(1.02, 1.02, 1.02), Vector3.ZERO, 0.39, 0.90, "metal_plate", Color(1.0, 0.42, 0.34))
 			_add_explosive_band()
 
+		"jerrycan":
+			display_title = "Канистра с бензином"
+			mass = 11.0
+			max_hp = 20.0
+			destructible = true
+			grabbable = true
+			throw_speed_mult = 1.22
+			phys_mat.bounce = 0.20
+			_add_box_collider(Vector3(0.40, 0.54, 0.22), Vector3(0.0, 0.27, 0.0))
+			_add_gltf_or_box("res://assets/downloaded/models/metal_jerrycan_green/model.gltf", Vector3(1.12, 1.12, 1.12), Vector3.ZERO, Vector3(0.40, 0.54, 0.22), "metal_plate")
+
 		"boulder":
-			display_title = "Каменный валун"
+			display_title = "Полевой валун"
 			mass = 38.0
 			max_hp = 9999.0
 			destructible = false
@@ -118,13 +133,13 @@ func _configure_by_type() -> void:
 				var sm := SphereMesh.new()
 				sm.radius = 0.34
 				sm.height = 0.68
-				sm.material = AssetCatalog.get_pbr_material("old_stone_wall_02")
+				sm.material = AssetCatalog.get_pbr_material("gravel_concrete_02")
 				mi.mesh = sm
 				mi.position = Vector3(0.0, 0.22, 0.0)
 				add_child(mi)
 
 		"treasure_chest":
-			display_title = "Сундук с оружием"
+			display_title = "Старый сундук"
 			mass = 34.0
 			max_hp = 85.0
 			destructible = true
@@ -141,28 +156,28 @@ func _configure_by_type() -> void:
 			_build_launchpad()
 
 		"wood_ramp":
-			display_title = "Деревянная рампа"
+			display_title = "Деревянный настил-рампа"
 			is_static_structure = true
 			destructible = false
 			grabbable = false
 			_build_wood_ramp()
 
 		"fire_pit":
-			display_title = "Огненная жаровня"
+			display_title = "Кострище из камней"
 			is_static_structure = true
 			destructible = false
 			grabbable = false
 			_build_fire_pit()
 
 		"lantern_post":
-			display_title = "Фонарный столб"
+			display_title = "Уличный фонарный столб"
 			is_static_structure = true
 			destructible = false
 			grabbable = false
 			_build_lantern_post()
 
 		"thicket_hedge":
-			display_title = "Непролазные заросли"
+			display_title = "Густой кустарник"
 			is_static_structure = true
 			destructible = false
 			grabbable = false
@@ -245,13 +260,10 @@ func _add_explosive_band() -> void:
 	var cyl := CylinderMesh.new()
 	cyl.top_radius = 0.405
 	cyl.bottom_radius = 0.405
-	cyl.height = 0.18
+	cyl.height = 0.14
 	var mat := StandardMaterial3D.new()
-	mat.albedo_color = Color(0.95, 0.14, 0.08)
-	mat.emission_enabled = true
-	mat.emission = Color(0.95, 0.18, 0.05)
-	mat.emission_energy_multiplier = 0.9
-	mat.roughness = 0.4
+	mat.albedo_color = Color(0.86, 0.16, 0.08)
+	mat.roughness = 0.62
 	cyl.material = mat
 	ring.mesh = cyl
 	ring.position = Vector3(0.0, 0.45, 0.0)
@@ -274,10 +286,11 @@ func _build_launchpad() -> void:
 	cyl.bottom_radius = 0.84
 	cyl.height = 0.10
 	var gmat := StandardMaterial3D.new()
-	gmat.albedo_color = Color(0.15, 0.85, 1.0)
+	gmat.albedo_color = Color(0.88, 0.62, 0.18)
 	gmat.emission_enabled = true
-	gmat.emission = Color(0.15, 0.78, 1.0)
-	gmat.emission_energy_multiplier = 2.2
+	gmat.emission = Color(0.95, 0.58, 0.15)
+	gmat.emission_energy_multiplier = 1.15
+	gmat.roughness = 0.55
 	cyl.material = gmat
 	glow_pad.mesh = cyl
 	glow_pad.position = Vector3(0.0, 0.25, 0.0)
@@ -319,16 +332,16 @@ func _build_wood_ramp() -> void:
 
 
 func _build_fire_pit() -> void:
-	_add_cylinder_collider(0.72, 0.42, Vector3(0.0, 0.21, 0.0))
-	_add_gltf_or_cyl("res://assets/downloaded/models/stone_fire_pit/model.gltf", Vector3.ONE, Vector3(0.0, 0.19, 0.0), 0.72, 0.42, "old_stone_wall_02", Color.WHITE)
-	VfxHelper.attach_fire_effect(self, 3.2, 13.0, 1.15)
+	_add_cylinder_collider(0.72, 0.36, Vector3(0.0, 0.18, 0.0))
+	_add_gltf_or_cyl("res://assets/downloaded/models/stone_fire_pit/model.gltf", Vector3.ONE, Vector3(0.0, 0.16, 0.0), 0.72, 0.36, "gravel_concrete_02", Color.WHITE)
+	VfxHelper.attach_fire_effect(self, 3.4, 15.5, 1.15)
 
 	_hazard_area = Area3D.new()
 	_hazard_area.collision_layer = 0
 	_hazard_area.collision_mask = 2 | 4
 	var acol := CollisionShape3D.new()
 	var acyl := CylinderShape3D.new()
-	acyl.radius = 0.75
+	acyl.radius = 0.78
 	acyl.height = 1.25
 	acol.shape = acyl
 	acol.position = Vector3(0.0, 0.65, 0.0)
@@ -337,63 +350,63 @@ func _build_fire_pit() -> void:
 
 
 func _build_lantern_post() -> void:
-	_add_cylinder_collider(0.14, 2.8, Vector3(0.0, 1.4, 0.0))
-	var post := MeshInstance3D.new()
-	var pm := CylinderMesh.new()
-	pm.top_radius = 0.08
-	pm.bottom_radius = 0.11
-	pm.height = 2.8
-	pm.material = AssetCatalog.get_pbr_material("brown_planks_03", Vector3(1.0, 1.0, 1.0))
-	post.mesh = pm
-	post.position = Vector3(0.0, 1.4, 0.0)
-	add_child(post)
+	_add_cylinder_collider(0.16, 3.85, Vector3(0.0, 1.925, 0.0))
+	var lamp := AssetCatalog.instantiate_model("res://assets/downloaded/models/street_lamp_01/model.gltf")
+	if lamp != null:
+		add_child(lamp)
+	else:
+		var post := MeshInstance3D.new()
+		var pm := CylinderMesh.new()
+		pm.top_radius = 0.08
+		pm.bottom_radius = 0.11
+		pm.height = 3.6
+		pm.material = AssetCatalog.get_pbr_material("brown_planks_03", Vector3(1.0, 1.0, 1.0))
+		post.mesh = pm
+		post.position = Vector3(0.0, 1.8, 0.0)
+		add_child(post)
 
-	var arm := MeshInstance3D.new()
-	var am := BoxMesh.new()
-	am.size = Vector3(0.10, 0.10, 0.65)
-	am.material = AssetCatalog.get_pbr_material("metal_plate")
-	arm.mesh = am
-	arm.position = Vector3(0.0, 2.72, 0.25)
-	add_child(arm)
-
-	var lantern := AssetCatalog.instantiate_model("res://assets/downloaded/models/wooden_lantern_01/model.gltf")
-	if lantern != null:
-		lantern.position = Vector3(0.0, 2.38, 0.50)
-		add_child(lantern)
-
-	var light := OmniLight3D.new()
-	light.light_color = Color(1.0, 0.72, 0.36)
-	light.light_energy = 2.4
-	light.omni_range = 12.0
-	light.shadow_enabled = true
-	light.position = Vector3(0.0, 2.35, 0.50)
-	add_child(light)
+	if DisplayServer.get_name() != "headless":
+		var light := OmniLight3D.new()
+		light.light_color = Color(1.0, 0.78, 0.44)
+		light.light_energy = 2.6
+		light.omni_range = 16.0
+		light.shadow_enabled = true
+		light.position = Vector3(0.0, 3.55, 0.0)
+		add_child(light)
 
 
 func _build_thicket_hedge() -> void:
-	_add_box_collider(Vector3(3.1, 2.8, 1.5), Vector3(0.0, 1.4, 0.0))
-	var shrub := AssetCatalog.instantiate_model("res://assets/downloaded/models/shrub_02/model.gltf")
-	if shrub != null:
-		shrub.scale = Vector3(1.35, 1.45, 1.15)
-		shrub.position = Vector3(0.0, 0.25, 0.0)
-		add_child(shrub)
-	for x_off in [-0.95, 0.95]:
-		var bush := AssetCatalog.instantiate_model("res://assets/downloaded/nature/BushBerries_1.glb")
-		if bush != null:
-			bush.scale = Vector3(1.55, 1.65, 1.45)
-			bush.position = Vector3(float(x_off), 0.0, 0.05)
-			bush.rotation_degrees.y = 45.0 * float(x_off)
-			add_child(bush)
-	if shrub == null:
+	_add_box_collider(Vector3(3.1, 2.35, 1.45), Vector3(0.0, 1.175, 0.0))
+	var center_shrub := AssetCatalog.instantiate_single_variant("res://assets/downloaded/models/shrub_02/model.gltf", 0)
+	if center_shrub != null:
+		center_shrub.scale = Vector3(1.45, 1.55, 1.25)
+		center_shrub.position = Vector3(0.0, -0.04, 0.0)
+		add_child(center_shrub)
+
+	var left_shrub := AssetCatalog.instantiate_single_variant("res://assets/downloaded/models/shrub_03/model.gltf", 0)
+	if left_shrub != null:
+		left_shrub.scale = Vector3(1.38, 1.48, 1.25)
+		left_shrub.position = Vector3(-1.02, -0.04, 0.05)
+		left_shrub.rotation_degrees.y = -38.0
+		add_child(left_shrub)
+
+	var right_shrub := AssetCatalog.instantiate_single_variant("res://assets/downloaded/models/shrub_04/model.gltf", 0)
+	if right_shrub != null:
+		right_shrub.scale = Vector3(1.38, 1.48, 1.25)
+		right_shrub.position = Vector3(1.02, -0.04, -0.05)
+		right_shrub.rotation_degrees.y = 42.0
+		add_child(right_shrub)
+
+	if center_shrub == null and left_shrub == null:
 		var fallback := MeshInstance3D.new()
 		var bm := BoxMesh.new()
-		bm.size = Vector3(3.0, 2.4, 1.4)
+		bm.size = Vector3(3.0, 2.3, 1.4)
 		var gmat := StandardMaterial3D.new()
-		gmat.albedo_color = Color(0.18, 0.36, 0.14)
+		gmat.albedo_color = Color(0.18, 0.34, 0.14)
 		gmat.roughness = 0.92
 		bm.material = gmat
 		fallback.mesh = bm
-		fallback.position = Vector3(0.0, 1.2, 0.0)
+		fallback.position = Vector3(0.0, 1.15, 0.0)
 		add_child(fallback)
 
 
@@ -464,8 +477,10 @@ func _physics_process(delta: float) -> void:
 			global_transform.basis = Basis(cur_q.slerp(_net_target_rot, clampf(delta * 16.0, 0.0, 1.0)))
 		return
 
-	if global_position.y < -2.5:
-		global_position = Vector3(clampf(global_position.x, -14.0, 14.0), 1.2, clampf(global_position.z, -24.0, 12.0))
+	if global_position.y < -3.0:
+		var cx := clampf(global_position.x, -82.0, 82.0)
+		var cz := clampf(global_position.z, -82.0, 82.0)
+		global_position = Vector3(cx, TerrainBuilder.get_height(cx, cz) + 1.2, cz)
 		linear_velocity = Vector3.ZERO
 		angular_velocity = Vector3.ZERO
 		return
@@ -508,7 +523,7 @@ func _server_sweep_flying_prop_hits(speed: float, delta: float) -> void:
 			continue
 		if collider.has_method("take_combat_hit"):
 			_hit_cooldown_ids[oid] = true
-			if prop_type == "explosive_barrel":
+			if _is_explosive_prop():
 				_server_explode(last_pusher_id)
 				return
 			var dmg := clampf(speed * (mass / 11.0) * 2.1, 18.0, 72.0)
@@ -526,10 +541,11 @@ func _on_body_entered(_body: Node) -> void:
 	if not multiplayer.is_server() or _exploded:
 		return
 	var speed := linear_velocity.length()
-	if prop_type == "explosive_barrel" and speed > 8.2 and _lethal_timer > 0.0:
+	var det_spd := 7.4 if prop_type == "jerrycan" else 8.2
+	if _is_explosive_prop() and speed > det_spd and _lethal_timer > 0.0:
 		_server_explode(last_pusher_id)
 	elif destructible and speed > 13.5 and _lethal_timer > 0.0:
-		take_combat_hit(28.0, last_pusher_id, Vector3.ZERO, global_position, "Удар о стену", true)
+		take_combat_hit(28.0, last_pusher_id, Vector3.ZERO, global_position, "Удар о препятствие", true)
 
 
 func _on_launchpad_entered(body: Node) -> void:
@@ -550,11 +566,11 @@ func _server_tick_fire_hazard() -> void:
 	for body in _hazard_area.get_overlapping_bodies():
 		if body == self:
 			continue
-		if body is PhysicsProp and (body as PhysicsProp).prop_type == "explosive_barrel":
+		if body is PhysicsProp and (body as PhysicsProp)._is_explosive_prop():
 			(body as PhysicsProp)._server_explode(0)
 		elif body.has_method("take_combat_hit"):
 			var up_push := Vector3(randf_range(-2.0, 2.0), 4.5, randf_range(-2.0, 2.0))
-			body.call("take_combat_hit", 14.0, 0, up_push, global_position + Vector3(0.0, 0.4, 0.0), "Огненная жаровня", true)
+			body.call("take_combat_hit", 14.0, 0, up_push, global_position + Vector3(0.0, 0.4, 0.0), "Костёр", true)
 
 
 func take_combat_hit(
@@ -582,12 +598,12 @@ func take_combat_hit(
 
 	hp -= amount
 	if hp <= 0.0:
-		if prop_type == "explosive_barrel":
+		if _is_explosive_prop():
 			_server_explode(attacker_id)
 		else:
 			_server_shatter()
 	else:
-		_prop_hit_fx_rpc.rpc(hit_pos, "hit_blunt", true)
+		_prop_hit_fx_rpc.rpc(hit_pos, "hit_blunt", prop_type in ["wooden_crate", "wine_barrel", "treasure_chest"])
 	return true
 
 
@@ -612,7 +628,7 @@ func _server_explode(instigator_id: int) -> void:
 
 	var space := get_world_3d().direct_space_state
 	var sph := SphereShape3D.new()
-	sph.radius = 6.8
+	sph.radius = 6.4 if prop_type == "jerrycan" else 7.0
 	var query := PhysicsShapeQueryParameters3D.new()
 	query.shape = sph
 	query.transform = Transform3D(Basis.IDENTITY, center)
@@ -632,18 +648,18 @@ func _server_explode(instigator_id: int) -> void:
 		var target_node := col as Node3D
 		var delta_vec := (target_node.global_position + Vector3(0.0, 0.7, 0.0)) - center
 		var dist := maxf(delta_vec.length(), 0.5)
-		var falloff := clampf(1.0 - (dist / 7.2), 0.20, 1.0)
+		var falloff := clampf(1.0 - (dist / 7.4), 0.20, 1.0)
 		var blast_dir := delta_vec.normalized()
 		blast_dir.y = maxf(blast_dir.y + 0.45, 0.45)
 		blast_dir = blast_dir.normalized()
 		if col.has_method("take_combat_hit"):
 			col.call(
 				"take_combat_hit",
-				88.0 * falloff,
+				86.0 * falloff,
 				instigator_id,
 				blast_dir * (21.0 * falloff),
 				target_node.global_position + Vector3(0.0, 0.8, 0.0),
-				"Пороховая бочка",
+				display_title,
 				true
 			)
 
@@ -653,7 +669,7 @@ func _server_explode(instigator_id: int) -> void:
 @rpc("authority", "call_local", "reliable")
 func _launchpad_fx_rpc(pos: Vector3) -> void:
 	SfxManager.play_3d("pickup", pos, 0.06, 1.0)
-	VfxHelper.spawn_hit_sparks(get_tree().current_scene, pos, Color(0.2, 0.9, 1.0), 16, 1.1)
+	VfxHelper.spawn_hit_sparks(get_tree().current_scene, pos, Color(0.95, 0.72, 0.25), 14, 1.0)
 
 
 @rpc("authority", "call_local", "reliable")

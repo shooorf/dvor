@@ -124,8 +124,10 @@ func _physics_process(delta: float) -> void:
 			global_transform.basis = Basis(next_q)
 		return
 
-	if global_position.y < -2.5:
-		global_position = Vector3(clampf(global_position.x, -14.0, 14.0), 1.2, clampf(global_position.z, -24.0, 12.0))
+	if global_position.y < -3.0:
+		var cx := clampf(global_position.x, -82.0, 82.0)
+		var cz := clampf(global_position.z, -82.0, 82.0)
+		global_position = Vector3(cx, TerrainBuilder.get_height(cx, cz) + 1.2, cz)
 		linear_velocity = Vector3.ZERO
 		angular_velocity = Vector3.ZERO
 		return

@@ -1,14 +1,19 @@
 #!/usr/bin/env python3
 """
-Автоматический загрузчик бесплатных CC0 3D-ассетов, PBR-материалов и HDRI-неба.
+Автоматический загрузчик бесплатных CC0 3D-ассетов, 4K PBR-материалов и HDRI-неба
+для уровня «Посёлок и Лес (Восточная Европа, Август)».
+
 Источники (100% CC0 Public Domain, без регистрации и API-ключей):
-  - Poly Haven (https://polyhaven.com) — 4K HDRI, 4K PBR текстуры, фотосканы 3D-объектов и оружия
-  - KayKit Adventurers (Kay Lousberg, CC0) — риггед 3D-персонажи с 76 боевыми анимациями
-  - Quaternius (CC0) — мечи, клеймор, дубина, боевой топор
+  - Poly Haven (https://polyhaven.com) — 4K летнее HDRI-небо, 15 наборов 4K PBR-текстур
+    (просёлочная дорога, трава, лесная тропа, сруб, крашеные доски, облупившаяся штукатурка, шифер, кирпич, кора)
+    и 29 реальных 3D-фотосканов (кустарники, крапива, чистотел, трава, пни, поваленные стволы,
+    уличные фонари, деревянные лавочки, лестницы, бочки, вёдра, топоры и оружие).
+  - KayKit Adventurers (Kay Lousberg, CC0) — риггед 3D-персонажи с 76 боевыми анимациями.
+  - Quaternius (CC0) — дополнительные модели оружия ближнего боя.
 
 Использование:
   python scripts/fetch_assets.py --quality 4k   # Для ПК с RTX 4070 (по умолчанию)
-  python scripts/fetch_assets.py --quality 1k   # Лёгкий профиль (~55 МБ) для быстрой проверки
+  python scripts/fetch_assets.py --quality 1k   # Облегчённый профиль для быстрой проверки
 """
 
 from __future__ import annotations
@@ -23,33 +28,72 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-USER_AGENT = "ArenaSandboxAssetFetcher/1.0 (Godot4 Forward+)"
+USER_AGENT = "DvorSandboxAssetFetcher/2.0 (Godot4 Forward+)"
 ROOT_DIR = Path(__file__).resolve().parent.parent
 OUT_DIR = ROOT_DIR / "assets" / "downloaded"
 
-HDRI_ID = "belfast_sunset_puresky"
+ASSET_PACK_VERSION = 2
+
+# Реальное предзакатное летнее небо над просёлочной дорогой в Европе (Poly Haven CC0)
+HDRI_ID = "evening_road_01_puresky"
 
 PBR_TEXTURES = [
-    "cobblestone_05",
-    "castle_brick_07",
-    "old_stone_wall_02",
+    # Ландшафт: луговая трава, просёлочная грунтовка, утоптанная тропинка, лесная подстилка
+    "leafy_grass",
     "aerial_grass_rock",
+    "brown_mud_leaves_01",
+    "grass_path_2",
+    "forest_leaves_02",
+    # Сельская архитектура Восточной Европы: доски, сруб, штукатурка, кирпич, шифер/железо, бетон
     "brown_planks_03",
+    "blue_painted_planks",
+    "green_rough_planks",
+    "blue_plaster_weathered",
+    "worn_mossy_plasterwall",
+    "brick_wall_001",
+    "corrugated_iron",
+    "gravel_concrete_02",
     "metal_plate",
+    # Настоящая кора деревьев (сосна, ива/липа/яблоня)
+    "knotted_pine_bark",
+    "bark_willow_02",
 ]
 
 POLYHAVEN_MODELS = [
+    # Реальные 3D-фотосканы растительности, травы, крапивы, кустов и лесного бурелома
+    "shrub_02",
+    "shrub_03",
+    "shrub_04",
+    "fern_02",
+    "grass_medium_01",
+    "grass_medium_02",
+    "weed_plant_02",
+    "nettle_plant",
+    "celandine_01",
+    "tree_stump_01",
+    "dead_tree_trunk",
+    "dry_branches_medium_01",
+    # Деревенский быт, дворы, освещение и интерактивные объекты песочницы
     "wooden_crate_01",
     "wine_barrel_01",
+    "barrel_03",
     "boulder_01",
     "stone_fire_pit",
     "treasure_chest",
     "wooden_lantern_01",
+    "street_lamp_01",
+    "industrial_wall_lamp",
+    "painted_wooden_bench",
+    "wooden_picnic_table",
+    "wooden_bucket_01",
+    "wooden_ladder",
+    "metal_jerrycan_green",
+    # Фотосканированное холодное оружие и сельский инструмент
+    "wooden_axe_02",
+    "wooden_handle_saber",
+    "wooden_hammer_01",
     "ornate_medieval_mace",
     "ornate_war_hammer",
-    "shrub_02",
-    "shrub_03",
-    "fern_02",
 ]
 
 KAYKIT_BASE = (
@@ -69,14 +113,6 @@ WEAPON_GLBS = {
     "Claymore.glb": f"{QUATERNIUS_BASE}/medieval_weapons_pack/Claymore.glb",
     "Club.glb": f"{QUATERNIUS_BASE}/single_knight_pack/Club.glb",
     "Axe.glb": f"{QUATERNIUS_BASE}/medieval_weapons_pack/Axe.glb",
-}
-
-NATURE_GLBS = {
-    "PineTree_1.glb": f"{QUATERNIUS_BASE}/nature_pack/PineTree_1.glb",
-    "CommonTree_1.glb": f"{QUATERNIUS_BASE}/nature_pack/CommonTree_1.glb",
-    "Willow_1.glb": f"{QUATERNIUS_BASE}/nature_pack/Willow_1.glb",
-    "Bush_1.glb": f"{QUATERNIUS_BASE}/nature_pack/Bush_1.glb",
-    "BushBerries_1.glb": f"{QUATERNIUS_BASE}/nature_pack/BushBerries_1.glb",
 }
 
 
@@ -103,7 +139,7 @@ def download_file(url: str, dest: Path, force: bool = False, retries: int = 3) -
     for attempt in range(retries):
         try:
             req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-            with urllib.request.urlopen(req, timeout=90) as resp:
+            with urllib.request.urlopen(req, timeout=120) as resp:
                 data = resp.read()
             with open(tmp_path, "wb") as f:
                 f.write(data)
@@ -121,16 +157,18 @@ def download_file(url: str, dest: Path, force: bool = False, retries: int = 3) -
     return (str(dest), 0, False)
 
 
-def build_download_plan(quality: str) -> list[tuple[str, Path]]:
+def build_download_plan(quality: str) -> tuple[list[tuple[str, Path]], set[Path]]:
     tasks: list[tuple[str, Path]] = []
+    force_paths: set[Path] = set()
 
-    print(f"[1/4] Запрос метаданных HDRI ({HDRI_ID}, {quality})...")
+    print(f"[1/4] Fetching HDRI metadata ({HDRI_ID}, {quality})...")
     hdri_meta = fetch_json(f"https://api.polyhaven.com/files/{HDRI_ID}")
     hdri_res = quality if quality in hdri_meta["hdri"] else "1k"
     hdri_url = hdri_meta["hdri"][hdri_res]["hdr"]["url"]
-    tasks.append((hdri_url, OUT_DIR / "hdri" / "sky.hdr"))
+    sky_dest = OUT_DIR / "hdri" / "sky.hdr"
+    tasks.append((hdri_url, sky_dest))
 
-    print(f"[2/4] Запрос метаданных PBR-материалов ({len(PBR_TEXTURES)} шт., {quality})...")
+    print(f"[2/4] Fetching PBR texture metadata ({len(PBR_TEXTURES)} sets, {quality})...")
     map_mapping = {
         "Diffuse": "diff.jpg",
         "nor_gl": "nor_gl.jpg",
@@ -156,7 +194,7 @@ def build_download_plan(quality: str) -> list[tuple[str, Path]]:
                 out_name = local_name.replace(".jpg", f".{first_fmt}")
             tasks.append((url, OUT_DIR / "textures" / tex_id / out_name))
 
-    print(f"[3/4] Запрос метаданных 3D-фотосканов Poly Haven ({len(POLYHAVEN_MODELS)} шт., {quality})...")
+    print(f"[3/4] Fetching Poly Haven 3D photoscan metadata ({len(POLYHAVEN_MODELS)} models, {quality})...")
     for model_id in POLYHAVEN_MODELS:
         mmeta = fetch_json(f"https://api.polyhaven.com/files/{model_id}")
         gltf_res = quality if quality in mmeta["gltf"] else "1k"
@@ -166,19 +204,17 @@ def build_download_plan(quality: str) -> list[tuple[str, Path]]:
         for rel_path, info in gltf_entry.get("include", {}).items():
             tasks.append((info["url"], model_dir / rel_path))
 
-    print("[4/4] Добавление персонажей KayKit, оружия и растительности Quaternius (CC0)...")
+    print("[4/4] Adding rigged characters and melee weapons (CC0)...")
     for fname, url in CHARACTER_GLBS.items():
         tasks.append((url, OUT_DIR / "characters" / fname))
     for fname, url in WEAPON_GLBS.items():
         tasks.append((url, OUT_DIR / "weapons" / fname))
-    for fname, url in NATURE_GLBS.items():
-        tasks.append((url, OUT_DIR / "nature" / fname))
 
-    return tasks
+    return tasks, force_paths
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Download free CC0 PBR & 3D assets for Arena Sandbox.")
+    parser = argparse.ArgumentParser(description="Download free CC0 PBR & 3D assets for Village & Forest Sandbox.")
     parser.add_argument(
         "--quality",
         choices=["1k", "2k", "4k"],
@@ -188,28 +224,37 @@ def main() -> int:
     parser.add_argument(
         "--force",
         action="store_true",
-        help="Re-download and overwrite existing files (useful when upgrading 1k -> 4k).",
+        help="Re-download and overwrite existing files.",
     )
     args = parser.parse_args()
 
     marker_file = OUT_DIR / "manifest.json"
     force = args.force
+    prev_hdri = None
     if marker_file.exists() and not force:
         try:
             prev = json.loads(marker_file.read_text(encoding="utf-8"))
+            prev_hdri = prev.get("hdri_id")
             if prev.get("quality") != args.quality:
                 print(
-                    f"Профиль качества изменён ({prev.get('quality')} -> {args.quality}), "
-                    "обновляем текстуры и модели..."
+                    f"Quality profile changed ({prev.get('quality')} -> {args.quality}), "
+                    "refreshing assets..."
                 )
                 force = True
         except Exception:
             pass
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
-    tasks = build_download_plan(args.quality)
+    # Force sky.hdr refresh if HDRI_ID changed from v1
+    if prev_hdri != HDRI_ID and (OUT_DIR / "hdri" / "sky.hdr").exists():
+        try:
+            (OUT_DIR / "hdri" / "sky.hdr").unlink()
+        except OSError:
+            pass
+
+    tasks, _ = build_download_plan(args.quality)
     total = len(tasks)
-    print(f"Всего файлов в плане загрузки: {total} (профиль: {args.quality})")
+    print(f"Total files in download plan: {total} (profile: {args.quality})")
 
     downloaded_bytes = 0
     completed = 0
@@ -225,17 +270,19 @@ def main() -> int:
             try:
                 rel_path, size, cached = fut.result()
                 downloaded_bytes += size
-                status = "кэш" if cached else f"{size / 1024:.0f} КБ"
-                print(f"  [{completed:>2}/{total}] {rel_path} ({status})")
+                status = "cached" if cached else f"{size / 1024:.0f} KB"
+                print(f"  [{completed:>3}/{total}] {rel_path} ({status})")
             except Exception as exc:
                 errors.append(str(exc))
-                print(f"  [ОШИБКА] {exc}", file=sys.stderr)
+                print(f"  [ERROR] {exc}", file=sys.stderr)
 
     if errors:
-        print(f"\nЗагрузка завершилась с ошибками ({len(errors)} шт.). Повторите запуск.", file=sys.stderr)
+        print(f"\nDownload finished with {len(errors)} error(s). Please re-run setup.bat.", file=sys.stderr)
         return 1
 
     manifest = {
+        "pack_version": ASSET_PACK_VERSION,
+        "hdri_id": HDRI_ID,
         "quality": args.quality,
         "files_count": total,
         "total_size_mb": round(downloaded_bytes / (1024 * 1024), 2),
@@ -247,8 +294,8 @@ def main() -> int:
     }
     marker_file.write_text(json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8")
     print(
-        f"\nГотово! Успешно проверено/скачано {total} файлов "
-        f"({manifest['total_size_mb']} МБ, качество: {args.quality})."
+        f"\nDone! Verified/downloaded {total} files "
+        f"({manifest['total_size_mb']} MB, profile: {args.quality})."
     )
     return 0
 

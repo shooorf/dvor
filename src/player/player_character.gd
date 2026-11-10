@@ -6,6 +6,7 @@ extends CharacterBody3D
 const MAX_HP: float = 100.0
 const MAX_STAMINA: float = 100.0
 const WALK_SPEED: float = 6.2
+const CROUCH_SPEED: float = 3.4
 const SPRINT_SPEED: float = 9.4
 const CARRY_SPEED_MULT: float = 0.78
 const JUMP_VELOCITY: float = 9.2
@@ -21,6 +22,7 @@ var hp: float = MAX_HP
 var stamina: float = MAX_STAMINA
 var is_dead: bool = false
 var is_blocking: bool = false
+var is_crouching: bool = false
 var block_started_msec: int = 0
 var equipped_weapon_id: String = ""
 var carried_prop_name: String = ""
@@ -28,6 +30,8 @@ var carried_prop_name: String = ""
 var cam_yaw: float = 0.0
 var cam_pitch: float = -0.22
 
+var _collision_shape: CollisionShape3D = null
+var _capsule_shape: CapsuleShape3D = null
 var _camera_pivot: Node3D = null
 var _spring_arm: SpringArm3D = null
 var _camera: Camera3D = null
@@ -38,6 +42,7 @@ var _hand_slot_l: Node3D = null
 var _shield_node: Node3D = null
 var _equipped_visual: Node3D = null
 var _nameplate: Label3D = null
+var _los_check_accum: float = 0.25
 
 var _combo_index: int = 0
 var _combo_reset_timer: float = 0.0
@@ -83,13 +88,13 @@ func _ready() -> void:
 	floor_max_angle = deg_to_rad(50.0)
 	floor_snap_length = 0.30
 
-	var col := CollisionShape3D.new()
-	var cap := CapsuleShape3D.new()
-	cap.radius = 0.38
-	cap.height = 1.84
-	col.shape = cap
-	col.position = Vector3(0.0, 0.92, 0.0)
-	add_child(col)
+	_collision_shape = CollisionShape3D.new()
+	_capsule_shape = CapsuleShape3D.new()
+	_capsule_shape.radius = 0.38
+	_capsule_shape.height = 1.84
+	_collision_shape.shape = _capsule_shape
+	_collision_shape.position = Vector3(0.0, 0.92, 0.0)
+	add_child(_collision_shape)
 
 	_net_target_pos = global_position
 	_net_target_yaw = cam_yaw
@@ -148,8 +153,8 @@ func _setup_character_slots_and_materials(model: Node3D) -> void:
 				var base_mat := mi.mesh.surface_get_material(0)
 				if base_mat is StandardMaterial3D:
 					var dup := (base_mat as StandardMaterial3D).duplicate() as StandardMaterial3D
-					dup.roughness = 0.48
-					dup.metallic = 0.18
+					dup.roughness = 0.76
+					dup.metallic = 0.08
 					if "Cape" in mi.name or "Hat" in mi.name or "Hood" in mi.name:
 						dup.albedo_color = accent_color.lerp(Color.WHITE, 0.25)
 					mi.material_override = dup
@@ -176,7 +181,7 @@ func _build_camera_rig() -> void:
 	_camera = Camera3D.new()
 	_camera.fov = 74.0
 	_camera.near = 0.08
-	_camera.far = 350.0
+	_camera.far = 420.0
 	_spring_arm.add_child(_camera)
 
 	if is_local_player() and DisplayServer.get_name() != "headless":
@@ -189,12 +194,50 @@ func _build_nameplate() -> void:
 		return
 	_nameplate = Label3D.new()
 	_nameplate.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	_nameplate.no_depth_test = false
 	_nameplate.position = Vector3(0.0, 2.26, 0.0)
 	_nameplate.font_size = 34
 	_nameplate.outline_size = 10
 	_nameplate.pixel_size = 0.0052
 	add_child(_nameplate)
 	_update_nameplate()
+
+
+## Проверка видимости ника для механики пряток: ник скрыт за стенами/заборами/деревьями/холмами,
+## на дистанции >26 м стоя или >4.2 м, когда противник присел в траве/кустах.
+func should_show_nameplate_from(viewer_origin: Vector3) -> bool:
+	var target_y := 0.92 if is_crouching else 1.42
+	var target_pt := global_position + Vector3(0.0, target_y, 0.0)
+	var dist := viewer_origin.distance_to(target_pt)
+	var max_dist := 18.0 if is_dead else (4.2 if is_crouching else 26.0)
+	if dist > max_dist:
+		return false
+
+	var space := get_world_3d().direct_space_state
+	var rq := PhysicsRayQueryParameters3D.create(viewer_origin, target_pt, 1)
+	return space.intersect_ray(rq).is_empty()
+
+
+func _apply_crouch_posture(delta: float) -> void:
+	var crouch_active := is_crouching and not is_dead
+	var target_cap_h := 1.22 if crouch_active else 1.84
+	if _capsule_shape != null and absf(_capsule_shape.height - target_cap_h) > 0.005:
+		_capsule_shape.height = target_cap_h
+		_collision_shape.position.y = target_cap_h * 0.5
+
+	if _camera_pivot != null and is_local_player():
+		var target_cam_y := 0.96 if crouch_active else 1.52
+		_camera_pivot.position.y = lerpf(_camera_pivot.position.y, target_cam_y, clampf(delta * 12.0, 0.0, 1.0))
+
+	if _visual_root != null:
+		var target_vscale := Vector3(0.84, 0.58, 0.84) if crouch_active else Vector3(0.82, 0.82, 0.82)
+		_visual_root.scale = _visual_root.scale.lerp(target_vscale, clampf(delta * 14.0, 0.0, 1.0))
+
+	if _anim_player != null:
+		_anim_player.speed_scale = 0.68 if (crouch_active and _anim_lock_timer <= 0.0) else 1.0
+
+	if _nameplate != null:
+		_nameplate.position.y = 1.48 if crouch_active else 2.26
 
 
 func _update_nameplate() -> void:
@@ -308,7 +351,7 @@ func _process_local_player(delta: float) -> void:
 		elif Input.is_action_just_pressed("dodge"):
 			_try_dodge()
 
-	# Физика перемещения
+	# Физика перемещения и механика скрытности [Ctrl]
 	var input_vec := Vector2.ZERO
 	if ui_free:
 		input_vec = Input.get_vector("move_left", "move_right", "move_forward", "move_back")
@@ -316,7 +359,16 @@ func _process_local_player(delta: float) -> void:
 	var cam_basis := Basis(Vector3.UP, cam_yaw)
 	var move_dir := (cam_basis * Vector3(input_vec.x, 0.0, input_vec.y)).normalized()
 
-	var is_sprinting := ui_free and Input.is_action_pressed("sprint") and move_dir.length() > 0.1 and not is_blocking and stamina > 4.0
+	var want_crouch := ui_free and Input.is_action_pressed("crouch") and is_on_floor() and _dodge_timer <= 0.0
+	if is_crouching and not want_crouch and is_on_floor():
+		var space_c := get_world_3d().direct_space_state
+		var head_q := PhysicsRayQueryParameters3D.create(global_position + Vector3(0.0, 1.12, 0.0), global_position + Vector3(0.0, 1.88, 0.0), 1)
+		if not space_c.intersect_ray(head_q).is_empty():
+			want_crouch = true
+	is_crouching = want_crouch
+	_apply_crouch_posture(delta)
+
+	var is_sprinting := ui_free and not is_crouching and Input.is_action_pressed("sprint") and move_dir.length() > 0.1 and not is_blocking and stamina > 4.0
 	if is_sprinting:
 		stamina = maxf(0.0, stamina - 14.0 * delta)
 		_stamina_regen_delay = 0.45
@@ -324,6 +376,7 @@ func _process_local_player(delta: float) -> void:
 	if not is_on_floor():
 		velocity.y -= GRAVITY * delta
 	elif ui_free and Input.is_action_just_pressed("jump") and _dodge_timer <= 0.0:
+		is_crouching = false
 		velocity.y = JUMP_VELOCITY
 		SfxManager.play_3d("jump", global_position, 0.08, -3.0)
 
@@ -332,7 +385,7 @@ func _process_local_player(delta: float) -> void:
 		velocity.x = _dodge_dir.x * DODGE_SPEED
 		velocity.z = _dodge_dir.z * DODGE_SPEED
 	else:
-		var spd := SPRINT_SPEED if is_sprinting else WALK_SPEED
+		var spd := CROUCH_SPEED if is_crouching else (SPRINT_SPEED if is_sprinting else WALK_SPEED)
 		if is_blocking:
 			spd *= 0.62
 		if not carried_prop_name.is_empty():
@@ -383,13 +436,23 @@ func _process_local_player(delta: float) -> void:
 	_sync_accum += delta
 	if _sync_accum >= 0.04:
 		_sync_accum = 0.0
-		_server_receive_client_state.rpc_id(1, global_position, _visual_root.rotation.y, _net_current_anim)
+		_server_receive_client_state.rpc_id(1, global_position, _visual_root.rotation.y, _net_current_anim, is_crouching)
 
 
 func _process_remote_player(delta: float) -> void:
 	global_position = global_position.lerp(_net_target_pos, clampf(delta * 18.0, 0.0, 1.0))
 	if _visual_root != null:
 		_visual_root.rotation.y = lerp_angle(_visual_root.rotation.y, _net_target_yaw, clampf(delta * 16.0, 0.0, 1.0))
+	_apply_crouch_posture(delta)
+
+	if _nameplate != null:
+		_los_check_accum += delta
+		if _los_check_accum >= 0.08:
+			_los_check_accum = 0.0
+			var vp := get_viewport()
+			var active_cam := vp.get_camera_3d() if vp != null else null
+			if active_cam != null:
+				_nameplate.visible = should_show_nameplate_from(active_cam.global_position)
 
 
 func _process_server_authority(delta: float) -> void:
@@ -399,9 +462,11 @@ func _process_server_authority(delta: float) -> void:
 			_server_respawn_player()
 		return
 
-	# Страховочный возврат на поверхность двора (обрывов на карте нет)
-	if global_position.y < -2.5:
-		var safe := Vector3(clampf(global_position.x, -14.0, 14.0), 1.5, clampf(global_position.z, -24.0, 12.0))
+	# Страховочный возврат на рельеф посёлка/леса (обрывов на карте нет)
+	if global_position.y < -3.0:
+		var cx := clampf(global_position.x, -82.0, 82.0)
+		var cz := clampf(global_position.z, -82.0, 82.0)
+		var safe := Vector3(cx, TerrainBuilder.get_height(cx, cz) + 1.25, cz)
 		global_position = safe
 		_respawn_rpc.rpc(safe)
 
@@ -675,28 +740,30 @@ func _refresh_equipped_visual() -> void:
 # ============================================================================
 
 @rpc("any_peer", "call_local", "unreliable_ordered")
-func _server_receive_client_state(pos: Vector3, yaw: float, anim_name: String) -> void:
+func _server_receive_client_state(pos: Vector3, yaw: float, anim_name: String, crouch_state: bool = false) -> void:
 	if not multiplayer.is_server():
 		return
 	var sender := multiplayer.get_remote_sender_id()
 	if sender != peer_id and sender != 0:
 		return
 	if not is_local_player():
-		if global_position.distance_to(pos) < 12.0:
+		if global_position.distance_to(pos) < 16.0:
 			global_position = pos
 		_net_target_pos = pos
 		_net_target_yaw = yaw
+		is_crouching = crouch_state
 		if _visual_root != null:
 			_visual_root.rotation.y = yaw
-	_client_broadcast_state.rpc(pos, yaw, anim_name)
+	_client_broadcast_state.rpc(pos, yaw, anim_name, crouch_state)
 
 
 @rpc("authority", "unreliable_ordered")
-func _client_broadcast_state(pos: Vector3, yaw: float, anim_name: String) -> void:
+func _client_broadcast_state(pos: Vector3, yaw: float, anim_name: String, crouch_state: bool = false) -> void:
 	if is_local_player():
 		return
 	_net_target_pos = pos
 	_net_target_yaw = yaw
+	is_crouching = crouch_state
 	if _anim_lock_timer <= 0.0:
 		_play_local_anim(anim_name)
 
@@ -1052,6 +1119,7 @@ func _server_handle_death(cause_label: String) -> void:
 	is_dead = true
 	_respawn_timer = 3.5
 	is_blocking = false
+	is_crouching = false
 
 	var arena := get_tree().current_scene
 	if not carried_prop_name.is_empty() and arena != null:
@@ -1131,6 +1199,7 @@ func _client_apply_knockback_rpc(kb_vel: Vector3, override_vertical: bool) -> vo
 @rpc("authority", "call_local", "reliable")
 func _respawn_rpc(spawn_pos: Vector3) -> void:
 	is_dead = false
+	is_crouching = false
 	hp = MAX_HP
 	stamina = MAX_STAMINA
 	collision_layer = 2

@@ -1,5 +1,5 @@
 extends Node
-## Управление графическими пресетами (по умолчанию — Ultra под RTX 4070).
+## Управление графическими пресетами (по умолчанию — Ultra под RTX 4070 для открытого мира 180×180 м).
 
 enum Preset {
 	ULTRA_4070 = 0,
@@ -21,7 +21,7 @@ func get_preset_name(p: int) -> String:
 		Preset.ULTRA_4070:
 			return "Ultra (RTX 4070 — SDFGI + 4K + Volumetric)"
 		Preset.HIGH:
-			return "Высокие (SSAO + SSR + Туман)"
+			return "Высокие (SSAO + SSR + Дымка)"
 		Preset.MEDIUM:
 			return "Средние (Высокий FPS)"
 	return "Ultra"
@@ -67,53 +67,53 @@ func apply_preset(preset: int) -> void:
 		_registered_sun.directional_shadow_blend_splits = true
 		match preset:
 			Preset.ULTRA_4070:
-				_registered_sun.directional_shadow_max_distance = 140.0
-				_registered_sun.shadow_blur = 1.35
+				_registered_sun.directional_shadow_max_distance = 210.0
+				_registered_sun.shadow_blur = 1.25
 			Preset.HIGH:
-				_registered_sun.directional_shadow_max_distance = 100.0
-				_registered_sun.shadow_blur = 1.1
+				_registered_sun.directional_shadow_max_distance = 145.0
+				_registered_sun.shadow_blur = 1.05
 			Preset.MEDIUM:
-				_registered_sun.directional_shadow_max_distance = 75.0
+				_registered_sun.directional_shadow_max_distance = 95.0
 				_registered_sun.shadow_blur = 0.8
 
 	if _registered_env != null:
 		_registered_env.tonemap_mode = Environment.TONE_MAPPER_AGX
-		_registered_env.tonemap_exposure = 1.05
+		_registered_env.tonemap_exposure = 1.04
 		_registered_env.glow_enabled = true
-		_registered_env.glow_intensity = 0.45
-		_registered_env.glow_bloom = 0.08
+		_registered_env.glow_intensity = 0.38
+		_registered_env.glow_bloom = 0.06
 		_registered_env.glow_blend_mode = Environment.GLOW_BLEND_MODE_SOFTLIGHT
 
 		match preset:
 			Preset.ULTRA_4070:
 				_registered_env.sdfgi_enabled = true
 				_registered_env.sdfgi_use_occlusion = true
-				_registered_env.sdfgi_bounce_feedback = 0.75
-				_registered_env.sdfgi_cascades = 4
-				_registered_env.sdfgi_min_cell_size = 0.25
+				_registered_env.sdfgi_bounce_feedback = 0.72
+				_registered_env.sdfgi_cascades = 6
+				_registered_env.sdfgi_min_cell_size = 0.35
 				_registered_env.ssao_enabled = true
-				_registered_env.ssao_radius = 1.25
-				_registered_env.ssao_intensity = 2.1
+				_registered_env.ssao_radius = 1.35
+				_registered_env.ssao_intensity = 2.0
 				_registered_env.ssil_enabled = true
-				_registered_env.ssil_radius = 4.0
-				_registered_env.ssil_intensity = 1.0
+				_registered_env.ssil_radius = 4.2
+				_registered_env.ssil_intensity = 0.95
 				_registered_env.ssr_enabled = true
-				_registered_env.ssr_max_steps = 64
+				_registered_env.ssr_max_steps = 48
 				_registered_env.volumetric_fog_enabled = true
-				_registered_env.volumetric_fog_density = 0.0065
-				_registered_env.volumetric_fog_albedo = Color(0.96, 0.86, 0.76)
-				_registered_env.volumetric_fog_anisotropy = 0.55
+				_registered_env.volumetric_fog_density = 0.0038
+				_registered_env.volumetric_fog_albedo = Color(0.98, 0.90, 0.78)
+				_registered_env.volumetric_fog_anisotropy = 0.62
 			Preset.HIGH:
 				_registered_env.sdfgi_enabled = false
 				_registered_env.ssao_enabled = true
-				_registered_env.ssao_radius = 1.1
+				_registered_env.ssao_radius = 1.2
 				_registered_env.ssao_intensity = 1.8
 				_registered_env.ssil_enabled = false
 				_registered_env.ssr_enabled = true
 				_registered_env.ssr_max_steps = 32
 				_registered_env.volumetric_fog_enabled = true
-				_registered_env.volumetric_fog_density = 0.0055
-				_registered_env.volumetric_fog_albedo = Color(0.95, 0.86, 0.78)
+				_registered_env.volumetric_fog_density = 0.0034
+				_registered_env.volumetric_fog_albedo = Color(0.97, 0.89, 0.78)
 			Preset.MEDIUM:
 				_registered_env.sdfgi_enabled = false
 				_registered_env.ssao_enabled = false
