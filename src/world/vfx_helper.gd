@@ -413,6 +413,7 @@ static func attach_fire_effect(target: Node3D, light_energy: float = 2.9, omni_r
 	smoke.name = "CampfireSmoke"
 	smoke.amount = 18
 	smoke.lifetime = 3.2
+	smoke.preprocess = 2.4
 	smoke.position = Vector3(0.0, 0.95 * particle_scale, 0.0)
 	smoke.emission_shape = CPUParticles3D.EMISSION_SHAPE_SPHERE
 	smoke.emission_sphere_radius = 0.18 * particle_scale
@@ -430,20 +431,17 @@ static func attach_fire_effect(target: Node3D, light_energy: float = 2.9, omni_r
 	smoke_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	smoke_mat.billboard_mode = BaseMaterial3D.BILLBOARD_PARTICLES
 	smoke_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	smoke_mat.vertex_color_use_as_albedo = true
+	smoke_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	smoke_mat.albedo_color = Color(0.62, 0.58, 0.56, 0.26)
 	smoke_mat.albedo_texture = _get_soft_smoke_tex()
 	smoke_q.material = smoke_mat
 	smoke.mesh = smoke_q
 
-	var smoke_grad := Gradient.new()
-	smoke_grad.offsets = PackedFloat32Array([0.0, 0.25, 0.70, 1.0])
-	smoke_grad.colors = PackedColorArray([
-		Color(0.55, 0.46, 0.40, 0.0),
-		Color(0.48, 0.46, 0.48, 0.26),
-		Color(0.44, 0.45, 0.48, 0.14),
-		Color(0.42, 0.43, 0.46, 0.0),
-	])
-	smoke.color_ramp = smoke_grad
+	var sc_curve := Curve.new()
+	sc_curve.add_point(Vector2(0.0, 0.15))
+	sc_curve.add_point(Vector2(0.45, 1.0))
+	sc_curve.add_point(Vector2(1.0, 0.0))
+	smoke.scale_amount_curve = sc_curve
 	root.add_child(smoke)
 
 	# 4. Мелкие взмывающие крупинки раскалённых искр
@@ -451,6 +449,7 @@ static func attach_fire_effect(target: Node3D, light_energy: float = 2.9, omni_r
 	sparks.name = "EmberSparks"
 	sparks.amount = 22
 	sparks.lifetime = 1.85
+	sparks.preprocess = 1.2
 	sparks.position = Vector3(0.0, 0.26 * particle_scale, 0.0)
 	sparks.emission_shape = CPUParticles3D.EMISSION_SHAPE_SPHERE
 	sparks.emission_sphere_radius = 0.26 * particle_scale

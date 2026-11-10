@@ -498,31 +498,42 @@ static func _append_canopy_rosette(
 	rng: RandomNumberGenerator
 ) -> void:
 	# Объёмное 3D-облако ветвей кроны со сферическими нормалями и пропорциями UV 1:1 (без растянутых полос!)
-	var card_count := 7 if drooping else 6
+	var card_count := 9 if drooping else 8
 	var base_yaw := rng.randf() * TAU
-	var dome_origin := center - Vector3(0.0, radius * 0.38, 0.0)
+	# Центр сферы нормалей смещён значительно ниже розетки, чтобы все нормали листьев смотрели вверх-наружу к солнцу
+	var dome_origin := center - Vector3(0.0, radius * 1.45, 0.0)
 
 	for c in range(card_count):
-		var yaw := base_yaw + float(c) * (TAU / float(card_count)) + rng.randf_range(-0.28, 0.28)
-		var is_upper_layer := (c % 2 == 0)
+		var yaw := base_yaw + float(c) * (TAU / float(card_count)) + rng.randf_range(-0.24, 0.24)
+		var layer_tier := c % 3
 		var pitch_deg: float
 		if drooping:
-			pitch_deg = rng.randf_range(12.0, 34.0) if is_upper_layer else rng.randf_range(36.0, 56.0)
+			if layer_tier == 0:
+				pitch_deg = rng.randf_range(-12.0, 10.0)
+			elif layer_tier == 1:
+				pitch_deg = rng.randf_range(12.0, 30.0)
+			else:
+				pitch_deg = rng.randf_range(30.0, 46.0)
 		else:
-			pitch_deg = rng.randf_range(-8.0, 18.0) if is_upper_layer else rng.randf_range(18.0, 38.0)
-		var roll := rng.randf_range(-0.42, 0.42)
+			if layer_tier == 0:
+				pitch_deg = rng.randf_range(-18.0, 4.0)
+			elif layer_tier == 1:
+				pitch_deg = rng.randf_range(6.0, 22.0)
+			else:
+				pitch_deg = rng.randf_range(20.0, 34.0)
+		var roll := rng.randf_range(-0.32, 0.32)
 		var basis := Basis(Vector3.UP, yaw) * Basis(Vector3.RIGHT, deg_to_rad(pitch_deg)) * Basis(Vector3.FORWARD, roll)
 
 		# Квадратная пропорция (w == l) исключает диагональное растяжение листьев в шейдере!
-		var sz := radius * rng.randf_range(0.96, 1.16)
+		var sz := radius * rng.randf_range(1.02, 1.24)
 		var w := sz
 		var l := sz
-		var arch := (-0.20 if drooping else -0.12) * sz
+		var arch := (-0.16 if drooping else -0.10) * sz
 
 		var card_origin := center + Vector3(
-			cos(yaw) * radius * 0.14,
-			(0.16 if is_upper_layer else -0.06) * radius,
-			sin(yaw) * radius * 0.14
+			cos(yaw) * radius * 0.12,
+			(0.18 if layer_tier == 0 else (0.04 if layer_tier == 1 else -0.08)) * radius,
+			sin(yaw) * radius * 0.12
 		)
 
 		var p00 := card_origin + basis * Vector3(-w * 0.5, 0.0, -l * 0.12)
@@ -722,14 +733,48 @@ float single_leaf_mask(vec2 lp, bool is_birch, out float vein, out vec2 nrm_tilt
 	return 1.0;
 }
 
-// Слой множества мелких листьев на разветвлённой ветке (изотропная сетка с перекрытием соседних ячеек)
+// Расстояние от точки q до развилок деревянной веточки (главный побег + 6 боковых веточек)
+float twig_skeleton_dist(vec2 q, float color_r, out float on_wood) {
+	on_wood = 0.0;
+	float vc = clamp(q.y, 0.0, 0.86);
+	float sx = 0.032 * sin(vc * 5.2 + color_r * 6.28);
+	float d_min = length(q - vec2(sx, vc));
+	float stem_w = mix(0.011, 0.0028, vc);
+	if (q.y >= 0.0 && q.y <= 0.86 && abs(q.x - sx) < stem_w) {
+		on_wood = 1.0;
+	}
+
+	for (int s = 0; s < 6; s++) {
+		float fs = float(s);
+		float sv = 0.10 + fs * 0.125;
+		float side = (s % 2 == 0) ? 1.0 : -1.0;
+		vec2 s_orig = vec2(0.032 * sin(sv * 5.2 + color_r * 6.28), sv);
+		float s_ang = side * mix(0.88, 0.48, fs / 5.0);
+		vec2 s_dir = vec2(sin(s_ang), cos(s_ang));
+		vec2 s_nrm = vec2(s_dir.y, -s_dir.x);
+		vec2 rel = q - s_orig;
+		float along = dot(rel, s_dir);
+		float max_s_len = mix(0.36, 0.16, fs / 5.0);
+		float along_c = clamp(along, 0.0, max_s_len);
+		float droop = -0.05 * (along_c * along_c);
+		float perp_val = dot(rel, s_nrm) - droop;
+		float d_seg = length(vec2(along - along_c, perp_val));
+		d_min = min(d_min, d_seg);
+		if (along > 0.0 && along < max_s_len && abs(perp_val) < mix(0.006, 0.0022, along_c / max_s_len)) {
+			on_wood = 1.0;
+		}
+	}
+	return d_min;
+}
+
+// Слой множества мелких отдельных листьев вдоль веточек (с воздушными просветами неба между листьями!)
 float eval_leaf_grid_layer(
 	vec2 q,
 	float grid_freq,
 	float layer_seed,
 	float color_r,
 	bool is_birch,
-	float bough_mask,
+	float density_keep,
 	out float out_vein,
 	out float out_shade,
 	out vec2 out_tilt
@@ -737,12 +782,11 @@ float eval_leaf_grid_layer(
 	out_vein = 0.0;
 	out_shade = 0.5;
 	out_tilt = vec2(0.0);
-	if (bough_mask <= 0.01) return 0.0;
 
 	vec2 gp = q * grid_freq;
 	vec2 base_cell = floor(gp);
 
-	// Проверяем текущую и соседние ячейки (2x2), чтобы листики свободно перекрывали друг друга без обрезания по границам ячейки
+	// Проверяем текущую и соседние ячейки (2x2), чтобы листики не обрезались по границам ячейки
 	vec2 sub = fract(gp) - 0.5;
 	int ox_start = (sub.x < 0.0) ? -1 : 0;
 	int oy_start = (sub.y < 0.0) ? -1 : 0;
@@ -751,26 +795,34 @@ float eval_leaf_grid_layer(
 		for (int ox = 0; ox <= 1; ox++) {
 			vec2 cid = base_cell + vec2(float(ox_start + ox), float(oy_start + oy));
 			vec2 cell_center_q = (cid + 0.5) / grid_freq;
-
-			// Ограничиваем рождение листьев овальным силуэтом ветви и боковых побегов
-			float rx = cell_center_q.x / mix(0.46, 0.22, pow(clamp(cell_center_q.y, 0.0, 1.0), 1.4));
-			float ry = (cell_center_q.y - 0.48) / 0.46;
-			float dist_env = rx * rx + ry * ry;
-			vec2 rnd = hash22(cid + vec2(layer_seed * 17.3, color_r * 31.7));
-			if (dist_env > 0.95 + rnd.x * 0.22 || cell_center_q.y < 0.05 || cell_center_q.y > 0.96) {
+			if (cell_center_q.y < 0.07 || cell_center_q.y > 0.95 || abs(cell_center_q.x) > 0.46) {
 				continue;
 			}
 
-			vec2 leaf_origin = cell_center_q + (rnd - 0.5) * (0.48 / grid_freq);
-			// Листья ориентированы веером вдоль побегов от центра ветки к краям
-			float base_ang = clamp(cell_center_q.x * 2.2, -1.05, 1.05) + (rnd.y - 0.5) * 0.85;
+			vec2 rnd = hash22(cid + vec2(layer_seed * 17.3, color_r * 31.7));
+			// Пропускаем часть ячеек для ажурности и воздушных просветов между листьями
+			if (rnd.y > density_keep) {
+				continue;
+			}
+
+			// Листья растут только вблизи деревянных веточек (не образуя сплошной зелёный блин!)
+			float dummy_wood = 0.0;
+			float td = twig_skeleton_dist(cell_center_q, color_r, dummy_wood);
+			if (td > 0.076 + rnd.x * 0.018) {
+				continue;
+			}
+
+			vec2 leaf_origin = cell_center_q + (rnd - 0.5) * (0.42 / grid_freq);
+			// Листья ориентированы естественно вдоль боковых побегов с живым разбросом углов
+			float base_ang = clamp(cell_center_q.x * 2.4, -1.15, 1.15) + (rnd.x - 0.5) * 1.10;
 			float cs = cos(base_ang);
 			float sn = sin(base_ang);
 			vec2 d = q - leaf_origin;
 			vec2 rot_d = vec2(d.x * cs - d.y * sn, d.x * sn + d.y * cs);
 
-			float leaf_len = (is_birch ? 1.28 : 1.42) / grid_freq * mix(0.84, 1.18, rnd.x);
-			vec2 lp = vec2(rot_d.x / leaf_len, rot_d.y / leaf_len + 0.35);
+			// Размер отдельного листика (~7-8 см в мировых координатах), меньше шага сетки, чтобы листья были раздельными!
+			float leaf_len = (is_birch ? 0.78 : 0.86) / grid_freq * mix(0.84, 1.14, rnd.y);
+			vec2 lp = vec2(rot_d.x / leaf_len, rot_d.y / leaf_len + 0.38);
 
 			float v_tmp = 0.0;
 			vec2 tilt_tmp = vec2(0.0);
@@ -791,33 +843,15 @@ void fragment() {
 	float v = q.y;
 	float u = q.x * 2.0; // -1..+1 для расчёта скелета веточек
 
-	// Сферическая нормаль купола кроны (не инвертируем на обратной стороне карты, чтобы вся крона освещалась как единый 3D-объём!)
+	// Сферическая нормаль купола кроны с мягким наклоном к небу (+Y), чтобы обе стороны ветки освещались объёмно и без тёмных граней
 	if (!FRONT_FACING) {
 		NORMAL = -NORMAL;
 	}
+	vec3 sky_up_vs = normalize((VIEW_MATRIX * vec4(0.0, 1.0, 0.0, 0.0)).xyz);
+	NORMAL = normalize(mix(NORMAL, sky_up_vs, 0.45));
 
-	// Главный тонкий побег и боковые развилки веточки
-	float stem_x = 0.04 * sin(v * 5.5 + COLOR.r * 6.28);
-	float stem_w = mix(0.016, 0.004, v);
-	float on_stem = (v < 0.82 && abs(q.x - stem_x) < stem_w) ? 1.0 : 0.0;
-
-	// 5 боковых тонких веточек
-	for (int s = 0; s < 5; s++) {
-		float fs = float(s);
-		float sv = 0.14 + fs * 0.14;
-		float side = (s % 2 == 0) ? 1.0 : -1.0;
-		vec2 s_orig = vec2(0.04 * sin(sv * 5.5 + COLOR.r * 6.28), sv);
-		float s_ang = side * mix(0.82, 0.55, fs / 4.0);
-		vec2 s_dir = vec2(sin(s_ang), cos(s_ang));
-		vec2 s_nrm = vec2(s_dir.y, -s_dir.x);
-		vec2 rel = q - s_orig;
-		float along = dot(rel, s_dir);
-		float perp = abs(dot(rel, s_nrm));
-		float max_s_len = mix(0.34, 0.16, fs / 4.0);
-		if (along > 0.0 && along < max_s_len && perp < mix(0.008, 0.003, along / max_s_len)) {
-			on_stem = 1.0;
-		}
-	}
+	float on_stem = 0.0;
+	float twig_d = twig_skeleton_dist(q, COLOR.r, on_stem);
 
 	float alpha = on_stem;
 	float is_wood = on_stem;
@@ -827,6 +861,7 @@ void fragment() {
 
 	if (foliage_mode == 1) {
 		// ХВОЙНАЯ ЛАПА СОСНЫ / ЕЛИ: разветвлённые лапы с густыми пучками хвоинок
+		float stem_x = 0.032 * sin(v * 5.2 + COLOR.r * 6.28);
 		for (int i = 0; i < 8; i++) {
 			float fi = float(i);
 			float sv = 0.08 + fi * 0.11;
@@ -868,25 +903,24 @@ void fragment() {
 			}
 		}
 	} else {
-		// АЖУРНАЯ БЕРЁЗОВАЯ / ЯБЛОНЕВАЯ ВЕТВЬ: два перекрывающихся слоя мелких резных листьев (~65 листьев на ветку!)
+		// АЖУРНАЯ БЕРЁЗОВАЯ / ЯБЛОНЕВАЯ ВЕТВЬ: мелкие резные листья вдоль тонких веточек с просветами неба
 		bool is_birch = (foliage_mode == 0);
-		float bough_env = 1.0 - smoothstep(0.38, 0.50, length(vec2(q.x * 1.05, (q.y - 0.50) * 0.92)));
 		float v1 = 0.0, s1 = 0.5;
 		vec2 t1 = vec2(0.0);
-		if (eval_leaf_grid_layer(q, is_birch ? 7.2 : 6.2, 1.0, COLOR.r, is_birch, bough_env, v1, s1, t1) > 0.5) {
+		if (eval_leaf_grid_layer(q, is_birch ? 10.4 : 8.8, 1.0, COLOR.r, is_birch, 0.82, v1, s1, t1) > 0.5) {
 			alpha = 1.0;
 			is_wood = 0.0;
 			vein_val = v1;
-			shade_var = s1 * 0.82;
+			shade_var = s1 * 0.85;
 			leaf_tilt = t1;
 		}
 		float v2 = 0.0, s2 = 0.5;
 		vec2 t2 = vec2(0.0);
-		if (eval_leaf_grid_layer(q + vec2(0.068, 0.054), is_birch ? 6.6 : 5.6, 2.0, COLOR.r, is_birch, bough_env, v2, s2, t2) > 0.5) {
+		if (eval_leaf_grid_layer(q + vec2(0.045, 0.038), is_birch ? 9.6 : 8.2, 2.0, COLOR.r, is_birch, 0.42, v2, s2, t2) > 0.5) {
 			alpha = 1.0;
 			is_wood = 0.0;
 			vein_val = v2;
-			shade_var = 0.22 + s2 * 0.78;
+			shade_var = 0.25 + s2 * 0.75;
 			leaf_tilt = t2;
 		}
 	}
@@ -895,26 +929,26 @@ void fragment() {
 	ALPHA_SCISSOR_THRESHOLD = 0.48;
 
 	if (is_wood > 0.5) {
-		ALBEDO = (foliage_mode == 0) ? vec3(0.30, 0.24, 0.19) : vec3(0.24, 0.17, 0.11);
+		ALBEDO = (foliage_mode == 0) ? vec3(0.28, 0.22, 0.17) : vec3(0.24, 0.17, 0.11);
 		ROUGHNESS = 0.88;
-		AO = 0.65;
+		AO = 0.70;
 		BACKLIGHT = vec3(0.0);
 	} else {
 		// Лёгкая 3D-вариация нормали каждого отдельного листика поверх сферического купола кроны
-		NORMAL = normalize(NORMAL + TANGENT * leaf_tilt.x + BINORMAL * leaf_tilt.y);
+		NORMAL = normalize(NORMAL + TANGENT * (leaf_tilt.x * 0.35) + BINORMAL * (leaf_tilt.y * 0.35));
 		float tree_gold = smoothstep(0.62, 0.95, sin(v_wpos.x * 0.09 + v_wpos.z * 0.07) * 0.5 + 0.5);
-		float canopy_ao = mix(0.55, 1.0, COLOR.b);
+		float canopy_ao = mix(0.68, 1.0, COLOR.b);
 		vec3 col = mix(leaf_dark, leaf_bright, shade_var);
 		if (foliage_mode == 0) {
-			col = mix(col, vec3(0.56, 0.49, 0.13), tree_gold * shade_var * 0.48);
+			col = mix(col, vec3(0.56, 0.49, 0.13), tree_gold * shade_var * 0.45);
 		}
-		col *= (1.0 - vein_val * 0.14) * mix(0.82, 1.04, COLOR.b);
+		col *= (1.0 - vein_val * 0.07) * mix(0.88, 1.05, COLOR.b);
 		ALBEDO = col;
 		AO = canopy_ao;
-		AO_LIGHT_AFFECT = 0.55;
-		ROUGHNESS = (foliage_mode == 1) ? 0.62 : 0.52;
-		SPECULAR = 0.26;
-		BACKLIGHT = col * ((foliage_mode == 1) ? 0.42 : 0.78);
+		AO_LIGHT_AFFECT = 0.35;
+		ROUGHNESS = (foliage_mode == 1) ? 0.62 : 0.54;
+		SPECULAR = 0.22;
+		BACKLIGHT = col * ((foliage_mode == 1) ? 0.48 : 0.85);
 	}
 }
 """

@@ -248,10 +248,12 @@ func _build_menu_ui() -> void:
 	# Левая карточка: Боец и Графика
 	var left_card := PanelContainer.new()
 	left_card.add_theme_stylebox_override("panel", _make_card_style(Color(0.45, 0.68, 0.95, 0.65)))
-	left_card.set_anchors_preset(Control.PRESET_CENTER_LEFT)
-	left_card.position = Vector2(36, -205)
-	left_card.size = Vector2(365, 430)
 	root.add_child(left_card)
+	left_card.set_anchors_preset(Control.PRESET_CENTER_LEFT)
+	left_card.offset_left = 36
+	left_card.offset_right = 401
+	left_card.offset_top = -215
+	left_card.offset_bottom = 215
 
 	var lv := VBoxContainer.new()
 	lv.add_theme_constant_override("separation", 11)
@@ -331,10 +333,12 @@ func _build_menu_ui() -> void:
 	# Правая карточка: Подключение с друзьями
 	var right_card := PanelContainer.new()
 	right_card.add_theme_stylebox_override("panel", _make_card_style(Color(0.95, 0.74, 0.35, 0.68)))
-	right_card.set_anchors_preset(Control.PRESET_CENTER_RIGHT)
-	right_card.position = Vector2(-416, -215)
-	right_card.size = Vector2(380, 450)
 	root.add_child(right_card)
+	right_card.set_anchors_preset(Control.PRESET_CENTER_RIGHT)
+	right_card.offset_left = -416
+	right_card.offset_right = -36
+	right_card.offset_top = -225
+	right_card.offset_bottom = 225
 
 	var rv := VBoxContainer.new()
 	rv.add_theme_constant_override("separation", 11)
@@ -406,11 +410,13 @@ func _build_menu_ui() -> void:
 
 	var quit_btn := Button.new()
 	quit_btn.text = "Выход на рабочий стол"
-	quit_btn.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
-	quit_btn.position = Vector2(-105, -54)
-	quit_btn.size = Vector2(210, 36)
-	quit_btn.pressed.connect(func() -> void: get_tree().quit())
 	root.add_child(quit_btn)
+	quit_btn.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
+	quit_btn.offset_left = -105
+	quit_btn.offset_right = 105
+	quit_btn.offset_top = -54
+	quit_btn.offset_bottom = -18
+	quit_btn.pressed.connect(func() -> void: get_tree().quit())
 
 
 func _sync_profile_fields() -> void:
