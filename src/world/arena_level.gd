@@ -134,15 +134,15 @@ func _build_environment_and_lighting() -> void:
 	if DisplayServer.get_name() != "headless":
 		var probe_village := ReflectionProbe.new()
 		probe_village.name = "VillageReflectionProbe"
-		probe_village.size = Vector3(360.0, 96.0, 680.0)
-		probe_village.position = Vector3(-155.0, 22.0, 0.0)
+		probe_village.size = Vector3(540.0, 96.0, 680.0)
+		probe_village.position = Vector3(-48.0, 20.0, 0.0)
 		probe_village.ambient_mode = ReflectionProbe.AMBIENT_DISABLED
 		add_child(probe_village)
 
 		var probe_forest := ReflectionProbe.new()
 		probe_forest.name = "ForestReflectionProbe"
-		probe_forest.size = Vector3(360.0, 96.0, 680.0)
-		probe_forest.position = Vector3(155.0, 22.0, 0.0)
+		probe_forest.size = Vector3(520.0, 96.0, 680.0)
+		probe_forest.position = Vector3(95.0, 22.0, 0.0)
 		probe_forest.ambient_mode = ReflectionProbe.AMBIENT_DISABLED
 		add_child(probe_forest)
 
