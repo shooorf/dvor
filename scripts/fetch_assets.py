@@ -27,6 +27,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
+import uuid
 import zipfile
 from pathlib import Path
 
@@ -34,14 +35,15 @@ USER_AGENT = "DvorSandboxAssetFetcher/3.0 (Godot4 Forward+)"
 ROOT_DIR = Path(__file__).resolve().parent.parent
 OUT_DIR = ROOT_DIR / "assets" / "downloaded"
 
-ASSET_PACK_VERSION = 4
+ASSET_PACK_VERSION = 5
 
 # Реальное предзакатное летнее небо над просёлочной дорогой в Европе (Poly Haven CC0)
 HDRI_ID = "evening_road_01_puresky"
 
 PBR_TEXTURES = [
-    # Ландшафт: луговая трава, просёлочная грунтовка, утоптанная тропинка, лесная подстилка
+    # Ландшафт: детализированный мшисто-луговой дёрн с веточками и камушками, просёлочная грунтовка, тропинка, лесная подстилка
     "leafy_grass",
+    "forrest_ground_01",
     "aerial_grass_rock",
     "brown_mud_leaves_01",
     "grass_path_2",
@@ -126,6 +128,11 @@ WEAPON_GLBS = {
     "Claymore.glb": f"{QUATERNIUS_BASE}/medieval_weapons_pack/Claymore.glb",
     "Club.glb": f"{QUATERNIUS_BASE}/single_knight_pack/Club.glb",
     "Axe.glb": f"{QUATERNIUS_BASE}/medieval_weapons_pack/Axe.glb",
+}
+
+# Готовые бесплатные 3D-модели BlenderKit (экспорт gltf_godot с PBR-текстурами дерева без регистрации)
+BLENDERKIT_MODELS = {
+    "wooden_pasture_fence": "be70264c-3c1f-4426-8b1f-c9ecc5d28428",  # Simple Wooden Fence (горизонтальные доски на столбиках)
 }
 
 # Реальные фотосканированные PBR-атласы хвойных лап ели и побегов сосны (Poly Haven CC0, только лёгкие текстуры без 500 МБ мешей)
@@ -370,11 +377,20 @@ def build_download_plan(quality: str) -> tuple[list[tuple[str, Path]], set[Path]
                     tasks.append((alpha_fmts["png"]["url"], model_dir / "textures" / "alpha.png"))
                 break
 
-    print("[5/5] Adding rigged characters and melee weapons (CC0)...")
+    print("[5/5] Adding rigged characters, melee weapons & rural pasture fence...")
     for fname, url in CHARACTER_GLBS.items():
         tasks.append((url, OUT_DIR / "characters" / fname))
     for fname, url in WEAPON_GLBS.items():
         tasks.append((url, OUT_DIR / "weapons" / fname))
+    for local_model_id, bk_asset_id in BLENDERKIT_MODELS.items():
+        dest_glb = OUT_DIR / "models" / local_model_id / "model.glb"
+        bk_meta = fetch_json(f"https://www.blenderkit.com/api/v1/assets/{bk_asset_id}/")
+        bk_files = {f.get("fileType"): f.get("downloadUrl") for f in bk_meta.get("files", [])}
+        dl_ep = bk_files.get("gltf_godot") or bk_files.get("gltf")
+        if not dl_ep:
+            raise RuntimeError(f"BlenderKit asset {bk_asset_id} has no gltf_godot/gltf file")
+        dl_info = fetch_json(f"{dl_ep}?scene_uuid={uuid.uuid4()}")
+        tasks.append((dl_info["filePath"], dest_glb))
 
     return tasks, force_paths
 

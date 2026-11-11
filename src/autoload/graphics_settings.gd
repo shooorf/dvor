@@ -87,15 +87,16 @@ func apply_preset(preset: int) -> void:
 		_registered_env.glow_intensity = 0.24
 		_registered_env.glow_bloom = 0.03
 		_registered_env.glow_blend_mode = Environment.GLOW_BLEND_MODE_SOFTLIGHT
-		# Лёгкая воздушная перспектива ТОЛЬКО вдалеке (вблизи 0..52 м идеальная прозрачность и контраст без молочной пелены!)
+		# Воздушная перспектива уведена далеко к горизонту (240..460 м) с глубоким лесным оттенком,
+		# чтобы деревья на границе игровой зоны (88..220 м) оставались сочно-зелёными без малейшей «седины»!
 		_registered_env.volumetric_fog_enabled = false
 		_registered_env.fog_enabled = (preset != Preset.MEDIUM)
 		_registered_env.fog_mode = Environment.FOG_MODE_DEPTH
-		_registered_env.fog_depth_begin = 76.0
-		_registered_env.fog_depth_end = 365.0
-		_registered_env.fog_light_color = Color(0.50, 0.60, 0.68)
-		_registered_env.fog_density = 0.72
-		_registered_env.fog_sky_affect = 0.16
+		_registered_env.fog_depth_begin = 240.0
+		_registered_env.fog_depth_end = 460.0
+		_registered_env.fog_light_color = Color(0.12, 0.19, 0.15)
+		_registered_env.fog_density = 0.22
+		_registered_env.fog_sky_affect = 0.08
 
 		match preset:
 			Preset.ULTRA_4070:

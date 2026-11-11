@@ -715,8 +715,28 @@ static func _build_airtight_outer_perimeter(parent: Node3D, rng: RandomNumberGen
 	# На выездах просёлочной дороги (Север и Юг) — поваленные бурей стволы и шлагбаум лесничества;
 	# Со стороны леса — многослойная стена густых кустов, валунов и валежника!
 	var mat_fence_wood := AssetCatalog.get_pbr_material("brown_planks_03", Vector3(0.4, 0.4, 0.4), true, Color(0.68, 0.56, 0.44))
-	var mat_fence_slate := AssetCatalog.get_pbr_material("corrugated_iron", Vector3(0.4, 0.4, 0.4), true, Color(0.62, 0.65, 0.64), 1.15, 0.08)
 	var mat_barrier := AssetCatalog.get_pbr_material("blue_painted_planks", Vector3(0.5, 0.5, 0.5), true, Color(0.95, 0.45, 0.35))
+
+	var pasture_fence_meshes := AssetCatalog.get_model_submeshes("res://assets/downloaded/models/wooden_pasture_fence/model.glb")
+	var pasture_fence_mesh: Mesh = null
+	if not pasture_fence_meshes.is_empty():
+		pasture_fence_mesh = pasture_fence_meshes[0].duplicate() as Mesh
+		if pasture_fence_mesh != null and pasture_fence_mesh.get_surface_count() > 0:
+			var orig_fmat := pasture_fence_mesh.surface_get_material(0)
+			if orig_fmat is BaseMaterial3D:
+				var fmat_pbr := (orig_fmat as BaseMaterial3D).duplicate() as BaseMaterial3D
+				fmat_pbr.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS_ANISOTROPIC
+				fmat_pbr.albedo_color = Color(0.84, 0.78, 0.70)
+				fmat_pbr.roughness = 0.88
+				fmat_pbr.metallic_specular = 0.12
+				pasture_fence_mesh.surface_set_material(0, fmat_pbr)
+
+	var pasture_fence_xf: Array[Transform3D] = []
+	var road_north_x := TerrainBuilder.get_road_center_x(-lim)
+	var road_south_x := TerrainBuilder.get_road_center_x(lim)
+	_append_pasture_fence_run(pasture_fence_xf, Vector2(-lim, -lim), Vector2(-lim, lim))
+	_append_pasture_fence_run(pasture_fence_xf, Vector2(-lim, -lim), Vector2(road_north_x - 4.8, -lim))
+	_append_pasture_fence_run(pasture_fence_xf, Vector2(-lim, lim), Vector2(road_south_x - 4.8, lim))
 
 	var shrub_meshes := AssetCatalog.get_model_submeshes("res://assets/downloaded/models/shrub_02/model.gltf")
 	var boulder_meshes := AssetCatalog.get_model_submeshes("res://assets/downloaded/models/boulder_01/model.gltf")
@@ -753,23 +773,28 @@ static func _build_airtight_outer_perimeter(parent: Node3D, rng: RandomNumberGen
 					perim_log_xf.append(Transform3D(Basis(Vector3.UP, rng.randf_range(-0.15, 0.15)).scaled(Vector3(2.4, 2.2, 2.2)), Vector3(wx, wy + 0.05, wz + (0.6 if wz > 0 else -0.6))))
 				continue
 
-			# На западной стороне и у крайних участков деревни ставим глухой 2.55-метровый забор, а сразу за ним поднимается дремучий лес
-			if wx < -8.0 and absf(wz) < 76.0 and (i % 2 == 0):
-				var fmat := mat_fence_wood if ((i / 2) % 2 == 0) else mat_fence_slate
-				var f_sz := Vector3(4.55, 2.55, 0.14) if is_ns else Vector3(0.14, 2.55, 4.55)
-				_add_box_part(sb, f_sz, Vector3(wx, wy + 1.05, wz), Vector3.ZERO, fmat, false)
+			var road_edge_x := road_north_x if edge == 0 else road_south_x
+			var has_pasture_fence := (edge == 2) or (is_ns and wx < road_edge_x - 4.6)
 
-			# По всему периметру (включая стыки заборов и всю лесную дугу) — плотный двойной вал кустарников, валунов и бурелома!
-			var sc1 := rng.randf_range(1.35, 1.95)
-			perim_shrub_xf.append(Transform3D(Basis(Vector3.UP, rng.randf() * TAU).scaled(Vector3(sc1, sc1 * 1.2, sc1)), Vector3(wx, wy - 0.05, wz)))
+			var out_dir := Vector2(1.0, 0.0)
+			match edge:
+				0: out_dir = Vector2(0.0, -1.0)
+				1: out_dir = Vector2(0.0, 1.0)
+				2: out_dir = Vector2(-1.0, 0.0)
+				_: out_dir = Vector2(1.0, 0.0)
 
-			var out_dir := Vector2(wx, wz).normalized()
-			var sc2 := rng.randf_range(1.65, 2.35)
+			if not has_pasture_fence:
+				var sc1 := rng.randf_range(1.35, 1.95)
+				perim_shrub_xf.append(Transform3D(Basis(Vector3.UP, rng.randf() * TAU).scaled(Vector3(sc1, sc1 * 1.2, sc1)), Vector3(wx, wy - 0.05, wz)))
+
+			var p2 := Vector2(wx, wz) + out_dir * (2.65 if has_pasture_fence else 1.65)
+			var wy2 := TerrainBuilder.get_height(p2.x, p2.y)
+			var sc2 := rng.randf_range(1.55, 2.25)
 			perim_shrub_xf.append(Transform3D(
-				Basis(Vector3.UP, rng.randf() * TAU).scaled(Vector3(sc2, sc2 * 1.35, sc2)),
-				Vector3(wx + out_dir.x * 1.65, wy - 0.05, wz + out_dir.y * 1.65)
+				Basis(Vector3.UP, rng.randf() * TAU).scaled(Vector3(sc2, sc2 * 1.30, sc2)),
+				Vector3(p2.x, wy2 - 0.05, p2.y)
 			))
-			var p3 := Vector2(wx, wz) + out_dir * 3.55
+			var p3 := Vector2(wx, wz) + out_dir * (4.65 if has_pasture_fence else 3.55)
 			var wy3 := TerrainBuilder.get_height(p3.x, p3.y)
 			var sc3 := rng.randf_range(1.95, 2.75)
 			perim_shrub_xf.append(Transform3D(
@@ -778,19 +803,44 @@ static func _build_airtight_outer_perimeter(parent: Node3D, rng: RandomNumberGen
 			))
 
 			if i % 3 == 0:
-				var rsc := rng.randf_range(1.3, 2.2)
-				perim_rock_xf.append(Transform3D(Basis(Vector3.UP, rng.randf() * TAU).scaled(Vector3(rsc, rsc, rsc)), Vector3(wx + out_dir.x * 0.45, wy - 0.08, wz + out_dir.y * 0.45)))
-			if i % 4 == 0 and ff > 0.35:
+				var pr := Vector2(wx, wz) + out_dir * (1.75 if has_pasture_fence else 0.45)
+				var rsc := rng.randf_range(1.2, 2.0)
+				perim_rock_xf.append(Transform3D(Basis(Vector3.UP, rng.randf() * TAU).scaled(Vector3(rsc, rsc, rsc)), Vector3(pr.x, TerrainBuilder.get_height(pr.x, pr.y) - 0.08, pr.y)))
+			if i % 4 == 0 and ff > 0.35 and not has_pasture_fence:
 				var lsc := rng.randf_range(1.5, 2.2)
 				var tang_yaw := (0.0 if is_ns else PI * 0.5) + rng.randf_range(-0.25, 0.25)
 				perim_log_xf.append(Transform3D(Basis(Vector3.UP, tang_yaw).scaled(Vector3(lsc, lsc * 1.4, lsc * 1.4)), Vector3(wx - out_dir.x * 0.35, wy + 0.05, wz - out_dir.y * 0.35)))
 
+	if pasture_fence_mesh != null and not pasture_fence_xf.is_empty():
+		RealisticFoliage._add_multimesh_batch(perim, "PerimeterPastureFence", pasture_fence_mesh, pasture_fence_xf, 185.0, true, 45.0)
 	if not shrub_meshes.is_empty() and not perim_shrub_xf.is_empty():
 		RealisticFoliage._add_multimesh_batch(perim, "PerimeterThicketShrubs", shrub_meshes[0], perim_shrub_xf, 145.0, false)
 	if not boulder_meshes.is_empty() and not perim_rock_xf.is_empty():
 		RealisticFoliage._add_multimesh_batch(perim, "PerimeterBoulders", boulder_meshes[0], perim_rock_xf, 145.0, true)
 	if not log_meshes.is_empty() and not perim_log_xf.is_empty():
 		RealisticFoliage._add_multimesh_batch(perim, "PerimeterWindfallLogs", log_meshes[0], perim_log_xf, 135.0, false)
+
+
+static func _append_pasture_fence_run(out_xforms: Array[Transform3D], p_start: Vector2, p_end: Vector2) -> void:
+	var total_len := p_start.distance_to(p_end)
+	if total_len < 2.0:
+		return
+	var segs := maxi(1, int(round(total_len / 5.05)))
+	var step_2d := (p_end - p_start) / float(segs)
+	var dir_2d := step_2d.normalized()
+	var side_3d := Vector3(-dir_2d.y, 0.0, dir_2d.x)
+
+	for s in range(segs):
+		var a2 := p_start + step_2d * float(s)
+		var b2 := p_start + step_2d * float(s + 1)
+		var p0 := Vector3(a2.x, TerrainBuilder.get_height(a2.x, a2.y) - 0.04, a2.y)
+		var p1 := Vector3(b2.x, TerrainBuilder.get_height(b2.x, b2.y) - 0.04, b2.y)
+		var span_vec := p1 - p0
+		var basis := Basis(side_3d * 1.85, Vector3.UP * 1.68, -span_vec / 3.255)
+		out_xforms.append(Transform3D(basis, p0))
+		if s == segs - 1:
+			var cap_basis := Basis(-side_3d * 1.85, Vector3.UP * 1.68, span_vec / 3.255)
+			out_xforms.append(Transform3D(cap_basis, p1 + side_3d * 0.004))
 
 
 # ============================================================================

@@ -368,6 +368,10 @@ uniform sampler2D grass_alb : source_color, filter_linear_mipmap_anisotropic, re
 uniform sampler2D grass_nor : hint_normal, filter_linear_mipmap_anisotropic, repeat_enable;
 uniform sampler2D grass_arm : filter_linear_mipmap_anisotropic, repeat_enable;
 
+uniform sampler2D meadow2_alb : source_color, filter_linear_mipmap_anisotropic, repeat_enable;
+uniform sampler2D meadow2_nor : hint_normal, filter_linear_mipmap_anisotropic, repeat_enable;
+uniform sampler2D meadow2_arm : filter_linear_mipmap_anisotropic, repeat_enable;
+
 uniform sampler2D road_alb : source_color, filter_linear_mipmap_anisotropic, repeat_enable;
 uniform sampler2D road_nor : hint_normal, filter_linear_mipmap_anisotropic, repeat_enable;
 uniform sampler2D road_arm : filter_linear_mipmap_anisotropic, repeat_enable;
@@ -415,17 +419,66 @@ void fragment() {
 	float patch_n = vnoise(v_world_pos.xz * 0.36);
 
 	float macro = vnoise(v_world_pos.xz * 0.055) * 0.65 + vnoise(v_world_pos.xz * 0.16) * 0.35;
-	vec3 grass_tint = mix(vec3(0.42, 0.54, 0.30), vec3(0.60, 0.65, 0.40), smoothstep(0.28, 0.78, macro));
+	float macro_s = smoothstep(0.22, 0.78, macro);
 	vec3 forest_tint = mix(vec3(0.44, 0.48, 0.34), vec3(0.62, 0.65, 0.48), smoothstep(0.20, 0.82, macro));
 
-	vec3 ga1 = texture(grass_alb, uv_a).rgb;
-	vec3 ga2 = texture(grass_alb, uv_b).rgb;
-	vec3 g_arm1 = texture(grass_arm, uv_a).rgb;
-	vec3 g_arm2 = texture(grass_arm, uv_b).rgb;
+	// Сэмплируем лесную подстилку (forest_leaves_02) заранее — используем микрорельеф её комьев/веточек и в лесу, и на лугу (0 лишних текстурных выборок!)
+	vec3 fa1 = texture(forest_alb, uv_a).rgb;
+	vec3 fa2 = texture(forest_alb, uv_b).rgb;
+	vec3 f_arm1 = texture(forest_arm, uv_a).rgb;
+	vec3 f_arm2 = texture(forest_arm, uv_b).rgb;
+	float fw = smoothstep(0.38, 0.62, patch_n + (f_arm2.r - f_arm1.r) * 0.40);
+	vec3 fa_raw = mix(fa1, fa2, fw);
+	vec3 f_alb = fa_raw * forest_tint;
+	vec3 f_nor = mix(texture(forest_nor, uv_a).rgb, texture(forest_nor, uv_b).rgb, fw);
+	vec3 f_arm = mix(f_arm1, f_arm2, fw);
+
+	// Луговой дёрн №1 (forrest_ground_01): рельефный зелёный мох и клевер с контрастными бурыми веточками
+	vec2 guv_a = uv_a * 1.42;
+	vec2 guv_b = uv_b * 1.36;
+	vec3 ga1 = texture(grass_alb, guv_a).rgb;
+	vec3 ga2 = texture(grass_alb, guv_b).rgb;
+	vec3 g_arm1 = texture(grass_arm, guv_a).rgb;
+	vec3 g_arm2 = texture(grass_arm, guv_b).rgb;
 	float gw = smoothstep(0.38, 0.62, patch_n + (g_arm2.r - g_arm1.r) * 0.35);
-	vec3 g_alb = mix(ga1, ga2, gw) * grass_tint;
-	vec3 g_nor = mix(texture(grass_nor, uv_a).rgb, texture(grass_nor, uv_b).rgb, gw);
-	vec3 g_arm = mix(g_arm1, g_arm2, gw);
+	vec3 g1_raw = mix(ga1, ga2, gw);
+	float lum1 = dot(g1_raw, vec3(0.30, 0.58, 0.12));
+	float twig_mask1 = smoothstep(0.012, 0.055, g1_raw.r - g1_raw.g * 0.96);
+	vec3 g1_moss = mix(vec3(0.052, 0.122, 0.030), vec3(0.118, 0.242, 0.058), clamp(lum1 * 5.6, 0.0, 1.0)) * mix(0.88, 1.15, macro_s);
+	vec3 g1_twig = mix(vec3(0.105, 0.078, 0.046), vec3(0.215, 0.165, 0.100), clamp(lum1 * 5.2, 0.0, 1.0));
+	vec3 g1_alb = mix(g1_moss, g1_twig, twig_mask1 * 0.88);
+	vec3 g1_nor = mix(texture(grass_nor, guv_a).rgb, texture(grass_nor, guv_b).rgb, gw);
+	vec3 g1_arm = mix(g_arm1, g_arm2, gw);
+
+	// Луговой дёрн №2 (aerial_grass_rock): сочные мшистые подушки с контрастными серыми полевыми камушками
+	vec2 m2_uv = uv_b * 1.24 + vec2(6.4, 13.7);
+	vec3 m2_raw = texture(meadow2_alb, m2_uv).rgb;
+	float lum2 = dot(m2_raw, vec3(0.30, 0.58, 0.12));
+	float pebble_mask = smoothstep(0.015, 0.085, m2_raw.b - m2_raw.g * 0.78);
+	vec3 m2_moss = mix(vec3(0.056, 0.128, 0.032), vec3(0.124, 0.250, 0.062), clamp(lum2 * 5.0, 0.0, 1.0)) * mix(0.90, 1.14, macro_s);
+	vec3 m2_pebble = mix(vec3(0.120, 0.126, 0.118), vec3(0.245, 0.252, 0.240), clamp(lum2 * 4.8, 0.0, 1.0));
+	vec3 m2_alb = mix(m2_moss, m2_pebble, pebble_mask * 0.88);
+	vec3 m2_nor = texture(meadow2_nor, m2_uv).rgb;
+	vec3 m2_arm = texture(meadow2_arm, m2_uv).rgb;
+
+	float meadow_mix = smoothstep(0.36, 0.66, vnoise(v_world_pos.xz * 0.24 + vec2(3.1, -5.7)) + (m2_arm.r - g1_arm.r) * 0.38);
+	vec3 gm_alb = mix(g1_alb, m2_alb, meadow_mix);
+	vec3 gm_nor = mix(g1_nor, m2_nor, meadow_mix);
+	vec3 gm_arm = mix(g1_arm, m2_arm, meadow_mix);
+
+	// Вплетаем в луговой дёрн рельефные мшистые кочки, трещинки почвы и веточки из fa_raw — сочный зелёный луг с лесной чёткостью деталей!
+	float lum_f = dot(fa_raw, vec3(0.30, 0.58, 0.12));
+	float twig_mask_f = smoothstep(0.012, 0.055, fa_raw.r - fa_raw.g * 0.94);
+	float crack_mask_f = 1.0 - smoothstep(0.24, 0.54, f_arm.r);
+	vec3 fa_clod_green = mix(vec3(0.048, 0.116, 0.028), vec3(0.122, 0.248, 0.060), clamp(lum_f * 4.8, 0.0, 1.0)) * mix(0.86, 1.16, macro_s);
+	vec3 fa_twig_brown = mix(vec3(0.115, 0.086, 0.050), vec3(0.230, 0.176, 0.108), clamp(lum_f * 4.6, 0.0, 1.0));
+	vec3 f_meadow_clods = mix(fa_clod_green, vec3(0.032, 0.044, 0.022), crack_mask_f * 0.72);
+	f_meadow_clods = mix(f_meadow_clods, fa_twig_brown, twig_mask_f * 0.90);
+
+	float clod_mix = smoothstep(0.26, 0.66, vnoise(v_world_pos.xz * 0.42 + vec2(-8.2, 4.9)) + (gm_arm.r - f_arm.r) * 0.42) * 0.62;
+	vec3 g_alb = mix(gm_alb, f_meadow_clods, clod_mix);
+	vec3 g_nor = normalize(mix(gm_nor * 2.0 - 1.0, f_nor * 2.0 - 1.0, clod_mix * 0.88)) * 0.5 + 0.5;
+	vec3 g_arm = mix(gm_arm, f_arm, clod_mix * 0.85);
 
 	vec3 r_alb = texture(road_alb, uv_a * 0.95).rgb * mix(vec3(0.56, 0.51, 0.43), vec3(0.72, 0.67, 0.57), macro);
 	vec3 r_nor = texture(road_nor, uv_a * 0.95).rgb;
@@ -434,15 +487,6 @@ void fragment() {
 	vec3 p_alb = texture(path_alb, uv_a * 1.12).rgb * mix(vec3(0.50, 0.51, 0.40), vec3(0.64, 0.64, 0.52), macro);
 	vec3 p_nor = texture(path_nor, uv_a * 1.12).rgb;
 	vec3 p_arm = texture(path_arm, uv_a * 1.12).rgb;
-
-	vec3 fa1 = texture(forest_alb, uv_a).rgb;
-	vec3 fa2 = texture(forest_alb, uv_b).rgb;
-	vec3 f_arm1 = texture(forest_arm, uv_a).rgb;
-	vec3 f_arm2 = texture(forest_arm, uv_b).rgb;
-	float fw = smoothstep(0.38, 0.62, patch_n + (f_arm2.r - f_arm1.r) * 0.40);
-	vec3 f_alb = mix(fa1, fa2, fw) * forest_tint;
-	vec3 f_nor = mix(texture(forest_nor, uv_a).rgb, texture(forest_nor, uv_b).rgb, fw);
-	vec3 f_arm = mix(f_arm1, f_arm2, fw);
 
 	// Детальное смешивание по высоте микрорельефа (Height-blended Splatmap) с резкими границами мха и веточек
 	float detail_n = vnoise(v_world_pos.xz * 2.1) * 0.26;
@@ -469,17 +513,18 @@ void fragment() {
 
 	ALBEDO = alb;
 	NORMAL_MAP = nor;
-	NORMAL_MAP_DEPTH = 1.45;
-	AO = pow(clamp(arm.r, 0.06, 1.0), 1.25);
-	AO_LIGHT_AFFECT = 0.82;
-	ROUGHNESS = clamp(arm.g * mix(1.04, 0.90, w_forest), 0.38, 0.96);
-	SPECULAR = mix(0.22, 0.30, w_forest);
+	NORMAL_MAP_DEPTH = mix(1.78, 1.45, max(w_road, w_path));
+	AO = mix(0.34, 1.0, pow(clamp(arm.r, 0.0, 1.0), 1.18));
+	AO_LIGHT_AFFECT = 0.74;
+	ROUGHNESS = clamp(arm.g * mix(1.04, 0.90, w_forest), 0.42, 0.96);
+	SPECULAR = mix(0.18, 0.28, w_forest);
 }
 """
 
 	var sm := ShaderMaterial.new()
 	sm.shader = _terrain_shader
-	_assign_tex_triplet(sm, "grass", "leafy_grass")
+	_assign_tex_triplet(sm, "grass", "forrest_ground_01")
+	_assign_tex_triplet(sm, "meadow2", "aerial_grass_rock")
 	_assign_tex_triplet(sm, "road", "brown_mud_leaves_01")
 	_assign_tex_triplet(sm, "path", "grass_path_2")
 	_assign_tex_triplet(sm, "forest", "forest_leaves_02")

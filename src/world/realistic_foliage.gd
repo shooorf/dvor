@@ -86,6 +86,7 @@ static var _pine_bough_tex: Texture2D = null
 static var _oak_spray_tex: Texture2D = null
 static var _maple_spray_tex: Texture2D = null
 static var _aspen_spray_tex: Texture2D = null
+static var _meadow_stalk_sheaf_tex: Texture2D = null
 static var _flat_normal_tex: Texture2D = null
 
 
@@ -276,19 +277,17 @@ static func _get_species_variant_count(species: int) -> int:
 	return 3
 
 
-static func _pick_primeval_border_species(rng: RandomNumberGenerator, spruce_weight: float = 0.45) -> int:
+static func _pick_primeval_border_species(rng: RandomNumberGenerator, spruce_weight: float = 0.48) -> int:
 	var r := rng.randf()
 	if r < spruce_weight:
 		return TreeSpecies.SPRUCE
-	elif r < spruce_weight + 0.25:
+	elif r < spruce_weight + 0.28:
 		return TreeSpecies.PINE
-	elif r < spruce_weight + 0.36:
+	elif r < spruce_weight + 0.40:
 		return TreeSpecies.OAK
-	elif r < spruce_weight + 0.45:
-		return TreeSpecies.BIRCH
-	elif r < spruce_weight + 0.50:
-		return TreeSpecies.ASPEN
-	return TreeSpecies.MAPLE
+	elif r < spruce_weight + 0.47:
+		return TreeSpecies.MAPLE
+	return TreeSpecies.BIRCH
 
 
 ## Окружает всю игровую зону со всех 4 сторон и углов сплошным дремучим лесом до самого горизонта (88..315 м)
@@ -331,7 +330,7 @@ static func _populate_primeval_border_forest(
 						var b1 := (Basis.from_euler(tilt1) * Basis(Vector3.UP, brng.randf() * TAU)).scaled(Vector3(w_sc1, h_sc1, w_sc1))
 						var xf1 := Transform3D(b1, Vector3(px, wy1, pz))
 						var key1 := "%d_%d" % [sp1, v_idx1]
-						if edge_d < 100.5:
+						if edge_d < 108.5:
 							(near_transforms[key1] as Array).append(xf1)
 						else:
 							(vista_transforms[key1] as Array).append(xf1)
@@ -1474,15 +1473,22 @@ float vnoise(vec2 p) {
 	return mix(mix(hash21(i), hash21(i + vec2(1.0, 0.0)), u.x), mix(hash21(i + vec2(0.0, 1.0)), hash21(i + vec2(1.0, 1.0)), u.x), u.y);
 }
 
+varying vec3 v_bark_wpos;
+
+void vertex() {
+	v_bark_wpos = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
+}
+
 void fragment() {
 	float trunk_t = COLOR.r;
 	float lenticels = vnoise(vec2(UV.x * 5.5, UV.y * 42.0));
 	float patches = vnoise(vec2(UV.x * 3.2, UV.y * 6.5));
 	float dark_marks = smoothstep(0.66, 0.78, lenticels) * 0.85 + smoothstep(0.72, 0.86, patches) * 0.65;
 	float base_rough_bark = (1.0 - smoothstep(0.03, 0.19, trunk_t)) * smoothstep(0.28, 0.65, patches);
+	float border_shade = mix(1.0, 0.42, smoothstep(88.0, 114.0, max(abs(v_bark_wpos.x), abs(v_bark_wpos.z))));
 
-	vec3 white_bark = mix(vec3(0.86, 0.84, 0.79), vec3(0.74, 0.72, 0.66), patches * 0.5);
-	vec3 black_bark = vec3(0.10, 0.09, 0.08);
+	vec3 white_bark = mix(vec3(0.86, 0.84, 0.79), vec3(0.74, 0.72, 0.66), patches * 0.5) * border_shade;
+	vec3 black_bark = vec3(0.10, 0.09, 0.08) * border_shade;
 	ALBEDO = mix(white_bark, black_bark, clamp(dark_marks + base_rough_bark, 0.0, 0.96));
 	NORMAL_MAP = texture(bark_nor, UV * vec2(1.5, 1.0)).rgb;
 	NORMAL_MAP_DEPTH = mix(1.3, 0.55, 1.0 - base_rough_bark);
@@ -1588,7 +1594,7 @@ static func _get_pbr_foliage_shader() -> Shader:
 	var sh := Shader.new()
 	sh.code = """
 shader_type spatial;
-render_mode cull_disabled, diffuse_burley, specular_schlick_ggx;
+render_mode cull_disabled, diffuse_burley, specular_disabled;
 
 uniform sampler2D tex_alb : source_color, filter_linear_mipmap_anisotropic;
 uniform sampler2D tex_alpha : hint_default_white, filter_linear_mipmap_anisotropic;
@@ -1598,16 +1604,19 @@ uniform float use_embedded_rgba = 0.0;
 uniform vec3 color_tint : source_color = vec3(1.0, 1.0, 1.0);
 uniform vec3 warm_var_tint : source_color = vec3(1.14, 1.06, 0.78);
 uniform float alpha_scissor = 0.40;
-uniform float roughness_val = 0.58;
-uniform float backlight_strength = 0.62;
-uniform float sky_normal_blend = 0.42;
+uniform float roughness_val = 0.72;
+uniform float backlight_strength = 0.58;
+uniform float sky_normal_blend = 0.36;
+uniform float border_shade_strength = 1.0;
 uniform float wind_strength = 1.0;
 uniform float flutter_speed = 4.6;
 uniform float flutter_amp = 0.026;
 
 varying vec3 v_wpos;
+varying float v_local_y;
 
 void vertex() {
+	v_local_y = VERTEX.y;
 	vec3 wp = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
 	v_wpos = wp;
 	float flex = COLOR.g;
@@ -1636,14 +1645,18 @@ void fragment() {
 
 	float tree_var = smoothstep(0.30, 0.92, sin(v_wpos.x * 0.08 + v_wpos.z * 0.07) * 0.5 + 0.5);
 	vec3 tint = mix(color_tint, color_tint * warm_var_tint, clamp(tree_var * 0.58 + (COLOR.r - 0.5) * 0.26, 0.0, 1.0));
-	vec3 final_col = sample_c.rgb * tint * mix(0.84, 1.06, COLOR.b);
+	// Естественное самозатенение нижних и внутренних ярусов кроны в густой заграничной чаще (0 затрат FPS!),
+	// чтобы деревья за пределами каскада теней выглядели глубоко-зелёными и объёмными, без малейшей «седины»!
+	float border_t = smoothstep(88.0, 118.0, max(abs(v_wpos.x), abs(v_wpos.z))) * border_shade_strength;
+	float crown_open = clamp(COLOR.b * 0.62 + clamp(v_local_y / 14.5, 0.0, 1.0) * 0.38, 0.0, 1.0);
+	float vista_shade = mix(1.0, mix(0.38, 0.92, crown_open), border_t);
+	vec3 final_col = sample_c.rgb * tint * mix(0.82, 1.06, COLOR.b) * vista_shade;
 
 	ALBEDO = final_col;
-	AO = mix(0.64, 1.0, COLOR.b);
-	AO_LIGHT_AFFECT = 0.35;
+	AO = mix(mix(0.62, 0.38, border_t), 1.0, COLOR.b);
+	AO_LIGHT_AFFECT = mix(0.38, 0.68, border_t);
 	ROUGHNESS = roughness_val;
-	SPECULAR = 0.22;
-	BACKLIGHT = final_col * backlight_strength;
+	BACKLIGHT = final_col * backlight_strength * mix(1.0, 0.52, border_t);
 }
 """
 	_pbr_foliage_shader = sh
@@ -1821,17 +1834,6 @@ static func _build_photoscanned_undergrowth(
 			Transform3D(Basis(Vector3.UP, rng.randf() * TAU).scaled(Vector3(sc, sc, sc)), Vector3(sx, sy - 0.04, sz))
 		)
 
-	if not shrub1.is_empty():
-		_add_multimesh_batch(parent, "Shrubs_FloweringHero", shrub1[0], shrub_buckets[0], 110.0, true, 34.0)
-	if not shrub2.is_empty():
-		_add_multimesh_batch(parent, "Shrubs_Large", shrub2[0], shrub_buckets[1], 115.0, true, 36.0)
-	if not shrub3.is_empty():
-		_add_multimesh_batch(parent, "Shrubs_Mid", shrub3[0], shrub_buckets[2], 95.0, true, 36.0)
-	if not shrub4.is_empty():
-		_add_multimesh_batch(parent, "Shrubs_Low", shrub4[0], shrub_buckets[3], 90.0, false, 36.0)
-	if not weed_bush.is_empty():
-		_add_multimesh_batch(parent, "Shrubs_WildBurdock", weed_bush[0], shrub_buckets[4], 82.0, false, 34.0)
-
 	# Б) Деревенские палисадники, заборы и обочины: цветущий periwinkle_plant, крапива, крупный чистотел и одуванчики 23.5k
 	var periwinkle_xf: Array[Transform3D] = []
 	var nettle_xf: Array[Transform3D] = []
@@ -1891,30 +1893,18 @@ static func _build_photoscanned_undergrowth(
 			var nsc2 := rng.randf_range(3.4, 5.2)
 			nettle_xf.append(Transform3D(Basis(Vector3.UP, rng.randf() * TAU).scaled(Vector3(nsc2, nsc2, nsc2)), Vector3(dx, dy, dz)))
 
-	for _dm in range(750):
-		var mx := rng.randf_range(-82.0, 82.0)
-		var mz := rng.randf_range(-82.0, 82.0)
-		if TerrainBuilder.get_forest_factor(mx, mz) > 0.55:
+	for _dm in range(1100):
+		var mx := rng.randf_range(-83.0, 83.0)
+		var mz := rng.randf_range(-83.0, 83.0)
+		if TerrainBuilder.get_forest_factor(mx, mz) > 0.52:
 			continue
 		if TerrainBuilder.get_road_distance(mx, mz) < 3.4 or TerrainBuilder.get_footpath_distance(mx, mz) < 1.1:
 			continue
 		if TerrainBuilder.is_inside_building_footprint(mx, mz, 0.6):
 			continue
 		var my := TerrainBuilder.get_height(mx, mz)
-		var dsc3 := rng.randf_range(2.1, 3.2)
+		var dsc3 := rng.randf_range(2.2, 3.4)
 		dandelion_mid_xf.append(Transform3D(Basis(Vector3.UP, rng.randf() * TAU).scaled(Vector3(dsc3, dsc3, dsc3)), Vector3(mx, my, mz)))
-
-	if not periwinkle.is_empty() and not periwinkle_xf.is_empty():
-		_add_multimesh_batch(parent, "Shrubs_GardenPeriwinkle", periwinkle[0], periwinkle_xf, 88.0, true, 32.0)
-	if not nettles.is_empty() and not nettle_xf.is_empty():
-		_add_multimesh_batch(parent, "PhotoscannedNettles", nettles[0], nettle_xf, 70.0, false, 34.0)
-	if not celandines.is_empty() and not celandine_xf.is_empty():
-		_add_multimesh_batch(parent, "PhotoscannedCelandine", celandines[0], celandine_xf, 68.0, false, 34.0)
-	if not dandelions.is_empty():
-		if not dandelion_hero_xf.is_empty():
-			_add_multimesh_batch(parent, "PhotoscannedDandelionsHero", dandelions[0], dandelion_hero_xf, 64.0, false, 28.0)
-		if dandelions.size() > 2 and not dandelion_mid_xf.is_empty():
-			_add_multimesh_batch(parent, "PhotoscannedDandelionsMeadow", dandelions[2], dandelion_mid_xf, 68.0, false, 32.0)
 
 	# В) Лесные папоротники, цветущие куртинки кислицы (shrub_sorrel_01) и ЖИВОПИСНЫЕ БОТАНИЧЕСКИЕ КЛАСТЕРЫ
 	#    прямо у корней деревьев и вдоль лесных тропинок (куст + папоротник + кислица + дернина с метёлками!)
@@ -2002,17 +1992,95 @@ static func _build_photoscanned_undergrowth(
 			var ssc := rng.randf_range(1.95, 2.85)
 			sorrel_xf.append(Transform3D(Basis(Vector3.UP, rng.randf() * TAU).scaled(Vector3(ssc, ssc, ssc)), Vector3(fx, fy - 0.01, fz)))
 
-	# Пересобираем низкие кусты с учётом добавленных лесных/тропиночных кластеров (заменяем старый вызов Shrubs_Mid/Low ниже)
-	var old_mid := parent.get_node_or_null("Shrubs_Mid")
-	if old_mid != null:
-		old_mid.free()
-	var old_low := parent.get_node_or_null("Shrubs_Low")
-	if old_low != null:
-		old_low.free()
-	if not shrub3.is_empty():
+	# 4) Живописные ЛУГОВЫЕ КУРТИНЫ на открытых полянах (цветущие кусты + кочки овсяницы + одуванчики + чистотел + мшистые валуны!)
+	var meadow_boulders := AssetCatalog.get_model_submeshes("res://assets/downloaded/models/boulder_01/model.gltf")
+	var meadow_stone_xf: Array[Transform3D] = []
+	for _mi in range(360):
+		var ix := rng.randf_range(-83.5, 80.0)
+		var iz := rng.randf_range(-83.5, 83.5)
+		var ff_m := TerrainBuilder.get_forest_factor(ix, iz)
+		if ff_m > 0.34:
+			continue
+		if TerrainBuilder.get_road_distance(ix, iz) < 4.6 or TerrainBuilder.get_footpath_distance(ix, iz) < 2.1:
+			continue
+		if TerrainBuilder.is_inside_building_footprint(ix, iz, 2.2) or _is_inside_homestead_yard(ix, iz, 1.4):
+			continue
+		if Vector2(ix, iz).distance_to(Vector2(14.0, -4.0)) < 7.2 or Vector2(ix, iz).distance_to(Vector2(-15.0, -6.0)) < 5.2:
+			continue
+		var iy := TerrainBuilder.get_height(ix, iz)
+		var main_roll := rng.randf()
+		if main_roll < 0.34:
+			var sc_h := rng.randf_range(1.25, 1.85)
+			(shrub_buckets[0] as Array).append(Transform3D(Basis(Vector3.UP, rng.randf() * TAU).scaled(Vector3.ONE * sc_h), Vector3(ix, iy - 0.04, iz)))
+		elif main_roll < 0.66:
+			var sc_m := rng.randf_range(1.15, 1.75)
+			(shrub_buckets[2] as Array).append(Transform3D(Basis(Vector3.UP, rng.randf() * TAU).scaled(Vector3.ONE * sc_m), Vector3(ix, iy - 0.04, iz)))
+		else:
+			var sc_w := rng.randf_range(2.8, 4.2)
+			(shrub_buckets[4] as Array).append(Transform3D(Basis(Vector3.UP, rng.randf() * TAU).scaled(Vector3.ONE * sc_w), Vector3(ix, iy - 0.04, iz)))
+
+		# Низкий подбой куртины (shrub_04 + сиреневый барвинок + одуванчики + чистотел + кислица + пышные кочки овсяницы)
+		var sub_cnt := rng.randi_range(2, 3)
+		for sb_i in range(sub_cnt):
+			var sa := rng.randf() * TAU
+			var sp := Vector2(ix, iz) + Vector2(cos(sa), sin(sa)) * rng.randf_range(0.75, 1.75)
+			var spy := TerrainBuilder.get_height(sp.x, sp.y)
+			if sb_i == 0:
+				var s4c := rng.randf_range(1.45, 2.20)
+				(shrub_buckets[3] as Array).append(Transform3D(Basis(Vector3.UP, rng.randf() * TAU).scaled(Vector3.ONE * s4c), Vector3(sp.x, spy - 0.03, sp.y)))
+			elif rng.randf() < 0.55:
+				var prc := rng.randf_range(0.95, 1.45)
+				periwinkle_xf.append(Transform3D(Basis(Vector3.UP, rng.randf() * TAU).scaled(Vector3.ONE * prc), Vector3(sp.x, spy - 0.03, sp.y)))
+			else:
+				var s3c := rng.randf_range(0.95, 1.38)
+				(shrub_buckets[2] as Array).append(Transform3D(Basis(Vector3.UP, rng.randf() * TAU).scaled(Vector3.ONE * s3c), Vector3(sp.x, spy - 0.04, sp.y)))
+
+		for fl_i in range(6):
+			var fla := float(fl_i) * (TAU / 6.0) + rng.randf_range(-0.35, 0.35)
+			var flp := Vector2(ix, iz) + Vector2(cos(fla), sin(fla)) * rng.randf_range(0.95, 2.55)
+			if TerrainBuilder.get_road_distance(flp.x, flp.y) < 3.6 or TerrainBuilder.get_footpath_distance(flp.x, flp.y) < 1.2:
+				continue
+			var fly := TerrainBuilder.get_height(flp.x, flp.y)
+			if fl_i % 3 == 0:
+				dandelion_hero_xf.append(Transform3D(Basis(Vector3.UP, rng.randf() * TAU).scaled(Vector3.ONE * rng.randf_range(2.05, 3.05)), Vector3(flp.x, fly, flp.y)))
+			elif fl_i % 3 == 1:
+				sorrel_xf.append(Transform3D(Basis(Vector3.UP, rng.randf() * TAU).scaled(Vector3.ONE * rng.randf_range(2.15, 2.95)), Vector3(flp.x, fly - 0.01, flp.y)))
+			else:
+				celandine_xf.append(Transform3D(Basis(Vector3.UP, rng.randf() * TAU).scaled(Vector3.ONE * rng.randf_range(2.15, 3.35)), Vector3(flp.x, fly, flp.y)))
+			gm1_xf.append(Transform3D(Basis(Vector3.UP, rng.randf() * TAU).scaled(Vector3.ONE * rng.randf_range(3.5, 5.1)), Vector3(flp.x + 0.25, fly - 0.02, flp.y - 0.20)))
+
+		if rng.randf() < 0.28:
+			var st_a := rng.randf() * TAU
+			var st_p := Vector2(ix, iz) + Vector2(cos(st_a), sin(st_a)) * rng.randf_range(0.65, 1.45)
+			var st_sc := rng.randf_range(0.45, 0.85)
+			meadow_stone_xf.append(Transform3D(
+				Basis(Vector3.UP, rng.randf() * TAU).scaled(Vector3(st_sc * 1.25, st_sc * 0.82, st_sc * 1.15)),
+				Vector3(st_p.x, TerrainBuilder.get_height(st_p.x, st_p.y) - 0.10, st_p.y)
+			))
+
+	if not shrub1.is_empty() and not (shrub_buckets[0] as Array).is_empty():
+		_add_multimesh_batch(parent, "Shrubs_FloweringHero", shrub1[0], shrub_buckets[0], 110.0, true, 34.0)
+	if not shrub2.is_empty() and not (shrub_buckets[1] as Array).is_empty():
+		_add_multimesh_batch(parent, "Shrubs_Large", shrub2[0], shrub_buckets[1], 115.0, true, 36.0)
+	if not shrub3.is_empty() and not (shrub_buckets[2] as Array).is_empty():
 		_add_multimesh_batch(parent, "Shrubs_Mid", shrub3[0], shrub_buckets[2], 95.0, true, 36.0)
-	if not shrub4.is_empty():
+	if not shrub4.is_empty() and not (shrub_buckets[3] as Array).is_empty():
 		_add_multimesh_batch(parent, "Shrubs_Low", shrub4[0], shrub_buckets[3], 90.0, true, 36.0)
+	if not weed_bush.is_empty() and not (shrub_buckets[4] as Array).is_empty():
+		_add_multimesh_batch(parent, "Shrubs_WildBurdock", weed_bush[0], shrub_buckets[4], 82.0, false, 34.0)
+	if not periwinkle.is_empty() and not periwinkle_xf.is_empty():
+		_add_multimesh_batch(parent, "Shrubs_GardenPeriwinkle", periwinkle[0], periwinkle_xf, 88.0, true, 32.0)
+	if not nettles.is_empty() and not nettle_xf.is_empty():
+		_add_multimesh_batch(parent, "PhotoscannedNettles", nettles[0], nettle_xf, 70.0, false, 34.0)
+	if not celandines.is_empty() and not celandine_xf.is_empty():
+		_add_multimesh_batch(parent, "PhotoscannedCelandine", celandines[0], celandine_xf, 68.0, false, 34.0)
+	if not dandelions.is_empty():
+		if not dandelion_hero_xf.is_empty():
+			_add_multimesh_batch(parent, "PhotoscannedDandelionsHero", dandelions[0], dandelion_hero_xf, 66.0, false, 28.0)
+		if dandelions.size() > 2 and not dandelion_mid_xf.is_empty():
+			_add_multimesh_batch(parent, "PhotoscannedDandelionsMeadow", dandelions[2], dandelion_mid_xf, 68.0, false, 32.0)
+	if not meadow_boulders.is_empty() and not meadow_stone_xf.is_empty():
+		_add_multimesh_batch(parent, "MeadowFieldstones", meadow_boulders[0], meadow_stone_xf, 95.0, true, 36.0)
 
 	if not ferns.is_empty() and not fern_xf.is_empty():
 		_add_multimesh_batch(parent, "PhotoscannedFerns", ferns[0], fern_xf, 76.0, false, 34.0)
@@ -2021,7 +2089,7 @@ static func _build_photoscanned_undergrowth(
 
 	# Г) 3 фотосканированных вида травы: крупные кочки овсяницы (grass_medium_01_large 4.6k!),
 	#    луговые куртины (grass_medium_02) и густая дернина с метёлками (grass_bermuda_01)
-	for _i in range(5200):
+	for _i in range(6800):
 		var gx := rng.randf_range(-84.0, 84.0)
 		var gz := rng.randf_range(-84.0, 84.0)
 		var rd := TerrainBuilder.get_road_distance(gx, gz)
@@ -2052,7 +2120,7 @@ static func _build_photoscanned_undergrowth(
 
 
 # ============================================================================
-# 3. АВГУСТОВСКИЙ ЛУГ — 56 000+ ПУЧКОВ 3D-ТРАВЫ + 4 200 СНОПОВ ВЫСОКИХ КОЛОСКОВ (Foliage003)
+# 3. АВГУСТОВСКИЙ ЛУГ — 56 000+ ПУЧКОВ СОЧНОЙ ТРАВЫ + ГУСТЫЕ КУРТИНЫ ЗОЛОТИСТЫХ КОЛОСЬЕВ (Foliage003)
 # ============================================================================
 
 static func _build_gpu_meadow_grass(parent: Node3D, rng: RandomNumberGenerator) -> void:
@@ -2079,7 +2147,7 @@ static func _build_gpu_meadow_grass(parent: Node3D, rng: RandomNumberGenerator) 
 
 		var gy := TerrainBuilder.get_height(gx, gz)
 		var wild_patch := sin(gx * 0.13 + 1.1) * cos(gz * 0.15 - 0.6)
-		var h_scale := rng.randf_range(0.68, 1.18) if (wild_patch > 0.25) else rng.randf_range(0.38, 0.72)
+		var h_scale := rng.randf_range(0.62, 1.05) if (wild_patch > 0.25) else rng.randf_range(0.36, 0.66)
 		var w_scale := rng.randf_range(0.68, 1.05)
 
 		grass_xforms.append(Transform3D(
@@ -2087,16 +2155,57 @@ static func _build_gpu_meadow_grass(parent: Node3D, rng: RandomNumberGenerator) 
 			Vector3(gx, gy - 0.02, gz)
 		))
 
-		# Над открытыми солнечными полянами колышутся высокие золотисто-зелёные колоски мятлика!
-		if i % 13 == 0 and weights.b < 0.55:
-			var st_sc := rng.randf_range(0.88, 1.36) * (1.18 if wild_patch > 0.20 else 0.86)
-			stalk_xforms.append(Transform3D(
-				Basis(Vector3.UP, rng.randf() * TAU).scaled(Vector3(st_sc, st_sc, st_sc)),
-				Vector3(gx, gy - 0.03, gz)
-			))
+	# Спелые золотистые колосья растут густыми природными куртинами/пачками по 10–20 снопов на солнечных лугах,
+	# у обочин грунтовки и вдоль деревянной пастбищной изгороди — контрастно выделяясь над тёмно-зелёной травой!
+	for _patch in range(280):
+		var cx := rng.randf_range(-85.0, 82.0)
+		var cz := rng.randf_range(-85.0, 85.0)
+		if TerrainBuilder.get_forest_factor(cx, cz) > 0.24:
+			continue
+		if TerrainBuilder.get_road_distance(cx, cz) < 4.3 or TerrainBuilder.get_footpath_distance(cx, cz) < 2.0:
+			continue
+		if TerrainBuilder.is_inside_building_footprint(cx, cz, 1.4) or _is_inside_homestead_yard(cx, cz, 0.8):
+			continue
+		if Vector2(cx, cz).distance_to(Vector2(14.0, -4.0)) < 6.2:
+			continue
+
+		var patch_rad := rng.randf_range(0.90, 2.15)
+		var sheaf_count := rng.randi_range(10, 20)
+		var elong_yaw := rng.randf() * TAU
+		var elong_dir := Vector2(cos(elong_yaw), sin(elong_yaw))
+		var elong_perp := Vector2(-elong_dir.y, elong_dir.x)
+
+		for s_idx in range(sheaf_count):
+			var r_norm := sqrt(rng.randf())
+			var ang := rng.randf() * TAU
+			var local_off := elong_dir * (cos(ang) * patch_rad * r_norm * 1.25) + elong_perp * (sin(ang) * patch_rad * r_norm * 0.78)
+			var sx := cx + local_off.x
+			var sz := cz + local_off.y
+			if absf(sx) > 86.2 or absf(sz) > 86.2:
+				continue
+			var sw := TerrainBuilder.get_surface_weights(sx, sz)
+			if sw.r > 0.22 or sw.g > 0.24 or sw.b > 0.30:
+				continue
+			if TerrainBuilder.is_inside_building_footprint(sx, sz, 0.55) or _is_inside_homestead_yard(sx, sz, -0.4):
+				continue
+			var sy := TerrainBuilder.get_height(sx, sz)
+			var center_boost := lerpf(1.08, 0.76, r_norm) * rng.randf_range(0.86, 1.12)
+			var tilt := Vector3(rng.randf_range(-0.07, 0.07), 0.0, rng.randf_range(-0.07, 0.07))
+			var b := (Basis.from_euler(tilt) * Basis(Vector3.UP, rng.randf() * TAU)).scaled(Vector3(center_boost, center_boost, center_boost))
+			stalk_xforms.append(Transform3D(b, Vector3(sx, sy - 0.04, sz)))
 
 	_add_multimesh_batch(parent, "MeadowGrass", tuft_mesh, grass_xforms, 68.0, false, 30.0)
-	_add_multimesh_batch(parent, "MeadowSeedStalks", stalks_mesh, stalk_xforms, 66.0, false, 30.0)
+	_add_multimesh_batch(parent, "MeadowSeedStalks", stalks_mesh, stalk_xforms, 78.0, false, 30.0)
+
+
+static func _is_inside_homestead_yard(x: float, z: float, extra_margin: float = 1.0) -> bool:
+	var p := Vector2(x, z)
+	for plot in TerrainBuilder.HOUSE_PLOTS:
+		var pos: Vector2 = plot["pos"]
+		var yard_r: float = float(plot["flat_r"]) + extra_margin if String(plot["style"]) != "forester_hut" else 6.8
+		if p.distance_to(pos) < yard_r:
+			return true
+	return false
 
 
 static func _create_meadow_seed_stalks_mesh() -> ArrayMesh:
@@ -2105,20 +2214,19 @@ static func _create_meadow_seed_stalks_mesh() -> ArrayMesh:
 
 	var rng := RandomNumberGenerator.new()
 	rng.seed = 20260825
-	var stalk_cards := 9
-	var dome_orig := Vector3(0.0, -0.6, 0.0)
+	var stalk_cards := 7
+	var dome_orig := Vector3(0.0, -0.5, 0.0)
 
 	for c in range(stalk_cards):
-		var yaw := float(c) * (TAU / float(stalk_cards)) + rng.randf_range(-0.22, 0.22)
-		var rad := rng.randf_range(0.04, 0.24)
+		var yaw := float(c) * (TAU / float(stalk_cards)) + rng.randf_range(-0.20, 0.20)
+		var rad := rng.randf_range(0.03, 0.22)
 		var orig := Vector3(cos(yaw) * rad, 0.0, sin(yaw) * rad)
-		# Ось +Z карточки направляем вверх с лёгким природным наклоном наружу (pitch ~ -74°..-82°)
-		var pitch := deg_to_rad(rng.randf_range(-82.0, -68.0))
+		# Ось +Z карточки направляем вверх с лёгким раскидистым наклоном спелых колосьев (pitch ~ -74°..-84°)
+		var pitch := deg_to_rad(rng.randf_range(-84.0, -72.0))
 		var basis := Basis(Vector3.UP, yaw) * Basis(Vector3.RIGHT, pitch)
-		var h := rng.randf_range(0.86, 1.24)
-		var w := h * 0.42
-		var poly: Array = MEADOW_STALK_POLYS[c % 2]
-		_append_curved_bough_card(st, orig, basis, w, h, -0.08 * h, 0.42, 0.96, poly, dome_orig, rng.randf(), 0.96)
+		var h := rng.randf_range(1.04, 1.44)
+		var w := h * 0.64
+		_append_curved_bough_card(st, orig, basis, w, h, -0.09 * h, 0.56, 1.0, FULL_SPRAY_POLY, dome_orig, rng.randf(), 0.96)
 
 	st.generate_tangents()
 	var mesh := ArrayMesh.new()
@@ -2132,17 +2240,122 @@ static func _get_meadow_stalks_material() -> Material:
 		return _meadow_stalks_mat
 	var sm := ShaderMaterial.new()
 	sm.shader = _get_pbr_foliage_shader()
-	_assign_foliage_textures(sm, "meadow_stalks")
-	sm.set_shader_parameter("use_embedded_rgba", 0.0)
-	sm.set_shader_parameter("color_tint", Color(0.72, 0.68, 0.40))
-	sm.set_shader_parameter("warm_var_tint", Color(0.90, 0.78, 0.44))
-	sm.set_shader_parameter("alpha_scissor", 0.32)
-	sm.set_shader_parameter("roughness_val", 0.62)
-	sm.set_shader_parameter("backlight_strength", 0.46)
-	sm.set_shader_parameter("sky_normal_blend", 0.44)
-	sm.set_shader_parameter("wind_strength", 1.35)
+	sm.set_shader_parameter("tex_alb", _get_meadow_stalk_sheaf_texture())
+	sm.set_shader_parameter("tex_nor", _get_flat_normal_texture())
+	sm.set_shader_parameter("use_embedded_rgba", 1.0)
+	sm.set_shader_parameter("color_tint", Color(0.90, 0.74, 0.34))
+	sm.set_shader_parameter("warm_var_tint", Color(1.08, 0.98, 0.80))
+	sm.set_shader_parameter("alpha_scissor", 0.26)
+	sm.set_shader_parameter("roughness_val", 0.74)
+	sm.set_shader_parameter("backlight_strength", 0.26)
+	sm.set_shader_parameter("sky_normal_blend", 0.26)
+	sm.set_shader_parameter("border_shade_strength", 0.0)
+	sm.set_shader_parameter("wind_strength", 1.38)
 	_meadow_stalks_mat = sm
 	return sm
+
+
+static func _extract_golden_panicle_stamp(
+	d_img: Image,
+	a_img: Image,
+	uv_rect: Rect2,
+	target_w: int,
+	target_h: int,
+	bleed: Color
+) -> Image:
+	var out := Image.create(target_w, target_h, false, Image.FORMAT_RGBA8)
+	if d_img == null or a_img == null or d_img.is_empty() or a_img.is_empty():
+		out.fill(bleed)
+		return out
+
+	var dc := d_img.get_region(Rect2i(
+		int(uv_rect.position.x * float(d_img.get_width())),
+		int(uv_rect.position.y * float(d_img.get_height())),
+		maxi(8, int(uv_rect.size.x * float(d_img.get_width()))),
+		maxi(8, int(uv_rect.size.y * float(d_img.get_height())))
+	))
+	var ac := a_img.get_region(Rect2i(
+		int(uv_rect.position.x * float(a_img.get_width())),
+		int(uv_rect.position.y * float(a_img.get_height())),
+		maxi(8, int(uv_rect.size.x * float(a_img.get_width()))),
+		maxi(8, int(uv_rect.size.y * float(a_img.get_height())))
+	))
+	dc.resize(target_w, target_h, Image.INTERPOLATE_BILINEAR)
+	ac.resize(target_w, target_h, Image.INTERPOLATE_BILINEAR)
+
+	for y in range(target_h):
+		var v_norm := float(y) / float(target_h)
+		# Плавный переход от тёплой соломы стебля внизу к спелому пшенично-золотистому колосу наверху!
+		var ear_t := 1.0 - smoothstep(0.45, 0.88, v_norm)
+		for x in range(target_w):
+			var a_c := ac.get_pixel(x, y).r
+			# Мягкое утолщение тонких остей и колосков на 1 пиксель, чтобы mipmap-уровни вдали не съедали метёлки!
+			var a_max := a_c
+			if x > 0 and x < target_w - 1 and y > 0 and y < target_h - 1:
+				a_max = maxf(a_max, ac.get_pixel(x - 1, y).r * 0.82)
+				a_max = maxf(a_max, ac.get_pixel(x + 1, y).r * 0.82)
+				a_max = maxf(a_max, ac.get_pixel(x, y - 1).r * 0.76)
+				a_max = maxf(a_max, ac.get_pixel(x, y + 1).r * 0.76)
+			if a_max < 0.11:
+				out.set_pixel(x, y, bleed)
+			else:
+				var raw_c := dc.get_pixel(x, y)
+				var inv := 1.0 / maxf(a_c, 0.34)
+				var lum := clampf((raw_c.r * 0.32 + raw_c.g * 0.56 + raw_c.b * 0.12) * inv, 0.28, 1.0)
+				var stem_straw := Color(0.45, 0.37, 0.15) * (0.74 + 0.36 * lum)
+				var ripe_ear := Color(0.68, 0.52, 0.18).lerp(Color(0.82, 0.66, 0.26), smoothstep(0.50, 0.92, lum))
+				var gold_col := stem_straw.lerp(ripe_ear, ear_t)
+				var final_a := clampf(pow((a_max - 0.10) / 0.90, 0.58), 0.0, 1.0)
+				out.set_pixel(x, y, Color(
+					clampf(gold_col.r, 0.0, 1.0),
+					clampf(gold_col.g, 0.0, 1.0),
+					clampf(gold_col.b, 0.0, 1.0),
+					final_a
+				))
+	return out
+
+
+static func _get_meadow_stalk_sheaf_texture() -> Texture2D:
+	if _meadow_stalk_sheaf_tex != null:
+		return _meadow_stalk_sheaf_tex
+	var rm := _get_spray_res_mult()
+	var m := float(rm)
+	var bleed := Color(0.68, 0.52, 0.18, 0.0)
+	var d_img := _load_image_any("res://assets/downloaded/textures/meadow_stalks/diff.jpg")
+	var a_img := _load_image_any("res://assets/downloaded/textures/meadow_stalks/alpha.jpg")
+
+	# Собираем пышный сноп из 3 реальных фотосканированных метёлок злаков (ambientCG Foliage003)
+	var pan_a := _extract_golden_panicle_stamp(d_img, a_img, Rect2(0.198, 0.132, 0.322, 0.680), 340 * rm, 740 * rm, bleed)
+	var pan_b := _extract_golden_panicle_stamp(d_img, a_img, Rect2(0.520, 0.132, 0.232, 0.675), 270 * rm, 730 * rm, bleed)
+	var pan_c := _extract_golden_panicle_stamp(d_img, a_img, Rect2(0.734, 0.148, 0.242, 0.675), 290 * rm, 740 * rm, bleed)
+	var pan_c_flip := pan_c.duplicate() as Image
+	pan_c_flip.flip_x()
+
+	var pan_l24 := _rotate_rgba_stamp(pan_c_flip, deg_to_rad(-23.0), bleed)
+	var pan_r24 := _rotate_rgba_stamp(pan_c, deg_to_rad(23.0), bleed)
+	var pan_l13 := _rotate_rgba_stamp(pan_a, deg_to_rad(-12.0), bleed)
+	var pan_r13 := _rotate_rgba_stamp(pan_b, deg_to_rad(13.0), bleed)
+
+	var csize := 1024 * rm
+	var canvas := Image.create(csize, csize, false, Image.FORMAT_RGBA8)
+	canvas.fill(bleed)
+
+	for spec in [
+		[Vector2(255, 585), pan_l24],
+		[Vector2(770, 580), pan_r24],
+		[Vector2(355, 520), pan_l13],
+		[Vector2(675, 515), pan_r13],
+		[Vector2(435, 485), pan_c_flip],
+		[Vector2(595, 480), pan_c],
+		[Vector2(512, 435), pan_b],
+		[Vector2(485, 545), pan_a],
+	]:
+		var pt: Vector2 = (spec[0] as Vector2) * m
+		_stamp_centered(canvas, spec[1], Vector2i(int(pt.x), int(pt.y)))
+
+	canvas.generate_mipmaps()
+	_meadow_stalk_sheaf_tex = ImageTexture.create_from_image(canvas)
+	return _meadow_stalk_sheaf_tex
 
 
 static func _create_curved_grass_tuft_mesh() -> ArrayMesh:
@@ -2232,18 +2445,18 @@ void vertex() {
 }
 
 void fragment() {
-	vec3 root_col = vec3(0.04, 0.09, 0.025);
-	vec3 mid_green = mix(vec3(0.10, 0.21, 0.055), vec3(0.16, 0.25, 0.075), v_patch);
-	vec3 tip_gold = mix(vec3(0.20, 0.30, 0.09), vec3(0.36, 0.35, 0.14), smoothstep(0.35, 0.85, v_patch + (v_seed - 0.5) * 0.35));
+	vec3 root_col = vec3(0.022, 0.078, 0.018);
+	vec3 mid_green = mix(vec3(0.055, 0.190, 0.042), vec3(0.095, 0.250, 0.058), v_patch);
+	vec3 tip_green = mix(vec3(0.125, 0.295, 0.068), vec3(0.185, 0.355, 0.092), smoothstep(0.30, 0.85, v_patch + (v_seed - 0.5) * 0.35));
 
 	vec3 col = mix(root_col, mid_green, smoothstep(0.0, 0.45, v_height));
-	col = mix(col, tip_gold, smoothstep(0.48, 1.0, v_height));
+	col = mix(col, tip_green, smoothstep(0.48, 1.0, v_height));
 
 	ALBEDO = col;
-	ROUGHNESS = 0.58;
-	SPECULAR = 0.24;
+	ROUGHNESS = 0.72;
+	SPECULAR = 0.08;
 	AO = mix(0.28, 1.0, v_height);
-	BACKLIGHT = col * (0.35 + 0.45 * v_height);
+	BACKLIGHT = col * (0.32 + 0.42 * v_height);
 }
 """
 	var sm := ShaderMaterial.new()

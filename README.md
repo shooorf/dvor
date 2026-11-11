@@ -45,7 +45,7 @@ winget install --id Python.Python.3.13 -e
 git pull
 .\run.bat
 ```
-Скрипт `run.bat` сам увидит новую версию пакета 4K-ассетов (`v4`), автоматически докачает недостающие 4K-текстуры ветвей/листвы и 3D-фотосканы Poly Haven + ambientCG, импортирует их и запустит игру!
+Скрипт `run.bat` сам увидит новую версию пакета 4K-ассетов (`v5`), автоматически докачает недостающие 4K-текстуры лугового дёрна, готовой деревянной изгороди и 3D-фотосканы Poly Haven + ambientCG + BlenderKit, импортирует их и запустит игру!
 
 ### Если разворачиваете с нуля:
 1. **`.\setup.bat`** — скачает портативный Godot 4.7.2 в `.engine/` и загрузит все 4K PBR-текстуры, 4K HDRI-небо и 3D-модели в `assets/downloaded/`.
@@ -81,8 +81,8 @@ git pull
 game1/
 ├── project.godot                 # Конфигурация Godot 4.7 (Forward+, 8K тени, физика, управление)
 ├── export_presets.cfg            # Настройки экспорта в Windows x64 .exe
-├── setup.bat / setup.ps1         # Автоустановка портативного движка и 4K CC0-ассетов (Pack v4)
-├── run.bat / editor.bat          # Запуск игры (с автопроверкой Pack v4) или редактора Godot
+├── setup.bat / setup.ps1         # Автоустановка портативного движка и 4K-ассетов (Pack v5)
+├── run.bat / editor.bat          # Запуск игры (с автопроверкой Pack v5) или редактора Godot
 ├── build.bat / build.ps1         # Компиляция автономного .exe в dist/ArenaSandbox/
 ├── scripts/
 │   └── fetch_assets.py           # Мультипоточный загрузчик 4K PBR, HDRI и 3D-фотосканов Poly Haven + KayKit
