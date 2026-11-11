@@ -152,9 +152,10 @@ render_mode cull_disabled, diffuse_burley, specular_schlick_ggx;
 uniform sampler2D tex_alb : source_color, filter_linear_mipmap_anisotropic, repeat_enable;
 uniform sampler2D tex_alpha : hint_default_white, filter_linear_mipmap_anisotropic, repeat_enable;
 uniform sampler2D tex_nor : hint_normal, filter_linear_mipmap_anisotropic, repeat_enable;
-uniform sampler2D tex_arm : filter_linear_mipmap_anisotropic, repeat_enable;
+uniform sampler2D tex_arm : hint_default_white, filter_linear_mipmap_anisotropic, repeat_enable;
 uniform float alpha_Threshold = 0.42;
 uniform float backlight_strength = 0.40;
+uniform float use_ao = 1.0;
 
 void vertex() {
 	// Мягкое покачивание листвы кустарников и травы на ветру
@@ -177,8 +178,11 @@ void fragment() {
 	NORMAL_MAP = texture(tex_nor, UV).rgb;
 	NORMAL_MAP_DEPTH = 0.95;
 	vec3 arm = texture(tex_arm, UV).rgb;
-	AO = arm.r;
-	AO_LIGHT_AFFECT = 0.60;
+	// У части сканов Poly Haven (например shrub_sorrel_01) канал R в *_arm не содержит AO (заполнен 0.0),
+	// а у shrub_04 фон вне листьев имеет R=0.0, что без защиты давало бы чёрную листву в тени леса.
+	float raw_ao = (arm.r < 0.08) ? 1.0 : mix(0.65, 1.0, arm.r);
+	AO = mix(1.0, raw_ao, use_ao);
+	AO_LIGHT_AFFECT = 0.25;
 	ROUGHNESS = clamp(arm.g, 0.35, 0.95);
 	METALLIC = arm.b * 0.1;
 	BACKLIGHT = alb * backlight_strength;
@@ -642,6 +646,8 @@ func _upgrade_scene_alpha_materials(res_path: String, ps: PackedScene) -> Packed
 		sm.set_shader_parameter("tex_nor", nor_tex)
 	if arm_tex != null:
 		sm.set_shader_parameter("tex_arm", arm_tex)
+	if model_id == "shrub_sorrel_01":
+		sm.set_shader_parameter("use_ao", 0.0)
 
 	var modified := false
 	var queue: Array[Node] = [inst]
