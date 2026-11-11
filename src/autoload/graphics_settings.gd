@@ -43,15 +43,15 @@ func apply_preset(preset: int) -> void:
 	if vp != null:
 		match preset:
 			Preset.ULTRA_4070:
-				vp.msaa_3d = Viewport.MSAA_DISABLED
-				vp.use_taa = true
-				vp.screen_space_aa = Viewport.SCREEN_SPACE_AA_DISABLED
+				vp.msaa_3d = Viewport.MSAA_2X
+				vp.use_taa = false
+				vp.screen_space_aa = Viewport.SCREEN_SPACE_AA_FXAA
 				vp.positional_shadow_atlas_size = 4096
 				RenderingServer.directional_shadow_atlas_set_size(4096, true)
 			Preset.HIGH:
-				vp.msaa_3d = Viewport.MSAA_DISABLED
-				vp.use_taa = true
-				vp.screen_space_aa = Viewport.SCREEN_SPACE_AA_DISABLED
+				vp.msaa_3d = Viewport.MSAA_2X
+				vp.use_taa = false
+				vp.screen_space_aa = Viewport.SCREEN_SPACE_AA_FXAA
 				vp.positional_shadow_atlas_size = 4096
 				RenderingServer.directional_shadow_atlas_set_size(4096, true)
 			Preset.MEDIUM:
@@ -84,8 +84,9 @@ func apply_preset(preset: int) -> void:
 		_registered_env.tonemap_mode = Environment.TONE_MAPPER_ACES
 		_registered_env.tonemap_exposure = 1.0
 		_registered_env.glow_enabled = true
-		_registered_env.glow_intensity = 0.24
-		_registered_env.glow_bloom = 0.03
+		_registered_env.glow_intensity = 0.20
+		_registered_env.glow_bloom = 0.0
+		_registered_env.glow_hdr_threshold = 1.35
 		_registered_env.glow_blend_mode = Environment.GLOW_BLEND_MODE_SOFTLIGHT
 		# Воздушная перспектива уведена далеко к горизонту (240..460 м) с глубоким лесным оттенком,
 		# чтобы деревья на границе игровой зоны (88..220 м) оставались сочно-зелёными без малейшей «седины»!

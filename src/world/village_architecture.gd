@@ -836,10 +836,11 @@ static func _append_pasture_fence_run(out_xforms: Array[Transform3D], p_start: V
 		var p0 := Vector3(a2.x, TerrainBuilder.get_height(a2.x, a2.y) - 0.04, a2.y)
 		var p1 := Vector3(b2.x, TerrainBuilder.get_height(b2.x, b2.y) - 0.04, b2.y)
 		var span_vec := p1 - p0
-		var basis := Basis(side_3d * 1.85, Vector3.UP * 1.68, -span_vec / 3.255)
+		# В запечённой меш-секции (AssetCatalog.get_model_submeshes) пролёт досок идёт вдоль -X (0..-3.242 м), а толщина доски — вдоль Z!
+		var basis := Basis(-span_vec / 3.255, Vector3.UP * 1.68, -side_3d * 1.85)
 		out_xforms.append(Transform3D(basis, p0))
 		if s == segs - 1:
-			var cap_basis := Basis(-side_3d * 1.85, Vector3.UP * 1.68, span_vec / 3.255)
+			var cap_basis := Basis(span_vec / 3.255, Vector3.UP * 1.68, side_3d * 1.85)
 			out_xforms.append(Transform3D(cap_basis, p1 + side_3d * 0.004))
 
 

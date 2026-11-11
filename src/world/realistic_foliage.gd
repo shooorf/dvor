@@ -83,6 +83,7 @@ static var _meadow_stalks_mat: Material = null
 static var _birch_spray_tex: Texture2D = null
 static var _orchard_spray_tex: Texture2D = null
 static var _pine_bough_tex: Texture2D = null
+static var _spruce_bough_tex: Texture2D = null
 static var _oak_spray_tex: Texture2D = null
 static var _maple_spray_tex: Texture2D = null
 static var _aspen_spray_tex: Texture2D = null
@@ -1094,16 +1095,30 @@ static func _extract_rgba_crop(
 				var u_norm := float(x) / float(target_w)
 				if u_norm < 0.24 or u_norm > 0.76:
 					a = 0.0
-			if a < 0.14:
+			if a < 0.16:
 				out.set_pixel(x, y, Color(bleed_rgb.r, bleed_rgb.g, bleed_rgb.b, 0.0))
 			else:
 				var c := dc.get_pixel(x, y)
-				var inv := (1.0 / maxf(a, 0.38)) if unpremultiply_black else 1.0
-				out.set_pixel(x, y, Color(
+				var max_ch := maxf(c.r, maxf(c.g, c.b))
+				# Снимаем чёрный фон ТОЛЬКО если пиксель реально затемнён чёрной подложкой (не превращая светлые края LeafSet005/016 в белую кайму 1.0!)
+				var inv := 1.0
+				if unpremultiply_black and max_ch < (0.30 * a + 0.06):
+					inv = 1.0 / maxf(a, 0.42)
+				var rgb := Color(
 					clampf(c.r * inv, 0.0, 1.0),
 					clampf(c.g * inv, 0.0, 1.0),
 					clampf(c.b * inv, 0.0, 1.0),
-					clampf((a - 0.12) / 0.88, 0.0, 1.0)
+					1.0
+				)
+				# Убираем белёсую фотограмметрическую кайму на полупрозрачных краях листа, чтобы мип-уровни вдали оставались насыщенно-зелёными!
+				if a < 0.68 and (rgb.r > 0.36 or rgb.b > 0.28):
+					var edge_fix := (1.0 - smoothstep(0.16, 0.68, a)) * 0.85
+					rgb = rgb.lerp(Color(bleed_rgb.r * 1.12, bleed_rgb.g * 1.12, bleed_rgb.b * 1.12, 1.0), edge_fix)
+				out.set_pixel(x, y, Color(
+					rgb.r,
+					rgb.g,
+					rgb.b,
+					clampf((a - 0.14) / 0.86, 0.0, 1.0)
 				))
 	return out
 
@@ -1341,6 +1356,46 @@ static func _get_pine_bough_texture() -> Texture2D:
 	return _pine_bough_tex
 
 
+## Очищенная текстура еловой лапы (fir_twig): удаляет серо-оливковый фон вокруг хвоинок,
+## из-за которого на дальних mipmap-уровнях (88..300 м) ели приобретали белёсо-седой налёт.
+static func _get_spruce_bough_texture() -> Texture2D:
+	if _spruce_bough_tex != null:
+		return _spruce_bough_tex
+	var bleed := Color(0.11, 0.22, 0.07, 0.0)
+	var d_img := _load_image_any("res://assets/downloaded/textures/fir_twig/diff.jpg")
+	var a_img := _load_image_any("res://assets/downloaded/textures/fir_twig/alpha.jpg")
+	var sz := 768 * _get_spray_res_mult()
+	if d_img == null or a_img == null or d_img.is_empty() or a_img.is_empty():
+		var fallback := Image.create(64, 64, true, Image.FORMAT_RGBA8)
+		fallback.fill(Color(0.14, 0.26, 0.09, 1.0))
+		_spruce_bough_tex = ImageTexture.create_from_image(fallback)
+		return _spruce_bough_tex
+
+	var dc := d_img.duplicate() as Image
+	var ac := a_img.duplicate() as Image
+	dc.resize(sz, sz, Image.INTERPOLATE_BILINEAR)
+	ac.resize(sz, sz, Image.INTERPOLATE_BILINEAR)
+
+	var out := Image.create(sz, sz, false, Image.FORMAT_RGBA8)
+	var rich_needle := Color(0.15, 0.29, 0.09)
+	for y in range(sz):
+		for x in range(sz):
+			var a := ac.get_pixel(x, y).r
+			if a < 0.16:
+				out.set_pixel(x, y, bleed)
+			else:
+				var c := dc.get_pixel(x, y)
+				if a < 0.62:
+					var edge_w := clampf((0.62 - a) / 0.46, 0.0, 1.0) * 0.72
+					c = c.lerp(rich_needle, edge_w)
+				var boosted_a := clampf(pow((a - 0.12) / 0.88, 0.74), 0.0, 1.0)
+				out.set_pixel(x, y, Color(c.r * 0.88, c.g * 0.96, c.b * 0.78, boosted_a))
+
+	out.generate_mipmaps()
+	_spruce_bough_tex = ImageTexture.create_from_image(out)
+	return _spruce_bough_tex
+
+
 static func _get_flat_normal_texture() -> Texture2D:
 	if _flat_normal_tex != null:
 		return _flat_normal_tex
@@ -1473,28 +1528,22 @@ float vnoise(vec2 p) {
 	return mix(mix(hash21(i), hash21(i + vec2(1.0, 0.0)), u.x), mix(hash21(i + vec2(0.0, 1.0)), hash21(i + vec2(1.0, 1.0)), u.x), u.y);
 }
 
-varying vec3 v_bark_wpos;
-
-void vertex() {
-	v_bark_wpos = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
-}
-
 void fragment() {
 	float trunk_t = COLOR.r;
 	float lenticels = vnoise(vec2(UV.x * 5.5, UV.y * 42.0));
 	float patches = vnoise(vec2(UV.x * 3.2, UV.y * 6.5));
 	float dark_marks = smoothstep(0.66, 0.78, lenticels) * 0.85 + smoothstep(0.72, 0.86, patches) * 0.65;
 	float base_rough_bark = (1.0 - smoothstep(0.03, 0.19, trunk_t)) * smoothstep(0.28, 0.65, patches);
-	float border_shade = mix(1.0, 0.42, smoothstep(88.0, 114.0, max(abs(v_bark_wpos.x), abs(v_bark_wpos.z))));
 
-	vec3 white_bark = mix(vec3(0.86, 0.84, 0.79), vec3(0.74, 0.72, 0.66), patches * 0.5) * border_shade;
-	vec3 black_bark = vec3(0.10, 0.09, 0.08) * border_shade;
+	vec3 white_bark = mix(vec3(0.84, 0.82, 0.77), vec3(0.72, 0.70, 0.64), patches * 0.5);
+	vec3 black_bark = vec3(0.10, 0.09, 0.08);
 	ALBEDO = mix(white_bark, black_bark, clamp(dark_marks + base_rough_bark, 0.0, 0.96));
 	NORMAL_MAP = texture(bark_nor, UV * vec2(1.5, 1.0)).rgb;
 	NORMAL_MAP_DEPTH = mix(1.3, 0.55, 1.0 - base_rough_bark);
 	vec3 arm = texture(bark_arm, UV * vec2(1.5, 1.0)).rgb;
 	AO = arm.r;
-	ROUGHNESS = mix(0.76, 0.94, clamp(dark_marks + base_rough_bark, 0.0, 1.0));
+	ROUGHNESS = mix(0.84, 0.96, clamp(dark_marks + base_rough_bark, 0.0, 1.0));
+	SPECULAR = 0.06;
 }
 """
 	var sm := ShaderMaterial.new()
@@ -1594,29 +1643,28 @@ static func _get_pbr_foliage_shader() -> Shader:
 	var sh := Shader.new()
 	sh.code = """
 shader_type spatial;
-render_mode cull_disabled, diffuse_burley, specular_disabled;
+render_mode cull_disabled, diffuse_burley, specular_disabled, alpha_to_coverage;
 
 uniform sampler2D tex_alb : source_color, filter_linear_mipmap_anisotropic;
 uniform sampler2D tex_alpha : hint_default_white, filter_linear_mipmap_anisotropic;
 uniform sampler2D tex_nor : hint_normal, filter_linear_mipmap_anisotropic;
 
 uniform float use_embedded_rgba = 0.0;
+uniform float use_normal_map = 0.0;
 uniform vec3 color_tint : source_color = vec3(1.0, 1.0, 1.0);
 uniform vec3 warm_var_tint : source_color = vec3(1.14, 1.06, 0.78);
 uniform float alpha_scissor = 0.40;
-uniform float roughness_val = 0.72;
-uniform float backlight_strength = 0.58;
-uniform float sky_normal_blend = 0.36;
+uniform float roughness_val = 1.0;
+uniform float backlight_strength = 0.42;
+uniform float sky_normal_blend = 0.32;
 uniform float border_shade_strength = 1.0;
 uniform float wind_strength = 1.0;
 uniform float flutter_speed = 4.6;
 uniform float flutter_amp = 0.026;
 
 varying vec3 v_wpos;
-varying float v_local_y;
 
 void vertex() {
-	v_local_y = VERTEX.y;
 	vec3 wp = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
 	v_wpos = wp;
 	float flex = COLOR.g;
@@ -1630,7 +1678,8 @@ void vertex() {
 void fragment() {
 	vec4 sample_c = texture(tex_alb, UV);
 	float a = (use_embedded_rgba > 0.5) ? sample_c.a : texture(tex_alpha, UV).r;
-	ALPHA = a;
+	float uv_fw = max(length(dFdx(UV)), length(dFdy(UV)));
+	ALPHA = clamp(a * (1.0 + clamp(uv_fw * 10.0, 0.0, 0.48)), 0.0, 1.0);
 	ALPHA_SCISSOR_THRESHOLD = alpha_scissor;
 
 	if (!FRONT_FACING) {
@@ -1638,25 +1687,26 @@ void fragment() {
 	}
 	vec3 sky_up_vs = normalize((VIEW_MATRIX * vec4(0.0, 1.0, 0.0, 0.0)).xyz);
 	NORMAL = normalize(mix(NORMAL, sky_up_vs, sky_normal_blend));
-	if (use_embedded_rgba < 0.5) {
+	if (use_embedded_rgba < 0.5 || use_normal_map > 0.5) {
 		NORMAL_MAP = texture(tex_nor, UV).rgb;
 		NORMAL_MAP_DEPTH = 0.72;
 	}
 
 	float tree_var = smoothstep(0.30, 0.92, sin(v_wpos.x * 0.08 + v_wpos.z * 0.07) * 0.5 + 0.5);
-	vec3 tint = mix(color_tint, color_tint * warm_var_tint, clamp(tree_var * 0.58 + (COLOR.r - 0.5) * 0.26, 0.0, 1.0));
-	// Естественное самозатенение нижних и внутренних ярусов кроны в густой заграничной чаще (0 затрат FPS!),
-	// чтобы деревья за пределами каскада теней выглядели глубоко-зелёными и объёмными, без малейшей «седины»!
-	float border_t = smoothstep(88.0, 118.0, max(abs(v_wpos.x), abs(v_wpos.z))) * border_shade_strength;
-	float crown_open = clamp(COLOR.b * 0.62 + clamp(v_local_y / 14.5, 0.0, 1.0) * 0.38, 0.0, 1.0);
-	float vista_shade = mix(1.0, mix(0.38, 0.92, crown_open), border_t);
-	vec3 final_col = sample_c.rgb * tint * mix(0.82, 1.06, COLOR.b) * vista_shade;
+	vec3 tint = mix(color_tint, color_tint * warm_var_tint, clamp(tree_var * 0.52 + (COLOR.r - 0.5) * 0.24, 0.0, 1.0));
+	float border_t = smoothstep(98.0, 138.0, max(abs(v_wpos.x), abs(v_wpos.z))) * border_shade_strength;
+	float inner_shade = mix(1.0, mix(0.74, 0.98, COLOR.b), border_t);
+	vec3 final_col = sample_c.rgb * tint * mix(0.82, 1.05, COLOR.b) * inner_shade;
 
 	ALBEDO = final_col;
-	AO = mix(mix(0.62, 0.38, border_t), 1.0, COLOR.b);
-	AO_LIGHT_AFFECT = mix(0.38, 0.68, border_t);
-	ROUGHNESS = roughness_val;
-	BACKLIGHT = final_col * backlight_strength * mix(1.0, 0.52, border_t);
+	AO = mix(0.62, 1.0, COLOR.b);
+	AO_LIGHT_AFFECT = mix(0.36, 0.52, border_t);
+	// В Forward+ specular_disabled отключает только блик аналитических ламп, но НЕ отражение Sky/ReflectionProbe!
+	// ROUGHNESS = 1.0 + SPECULAR = 0.0 обнуляют f0 и скользящий френель max(1.0 - roughness, f0), убирая любую «седину».
+	ROUGHNESS = 1.0;
+	SPECULAR = 0.0;
+	METALLIC = 0.0;
+	BACKLIGHT = final_col * backlight_strength * mix(1.0, 0.68, border_t);
 }
 """
 	_pbr_foliage_shader = sh
@@ -1672,74 +1722,71 @@ static func _get_canopy_material(species: int) -> Material:
 
 	match species:
 		TreeSpecies.SPRUCE:
-			_assign_foliage_textures(sm, "fir_twig")
-			sm.set_shader_parameter("use_embedded_rgba", 0.0)
-			sm.set_shader_parameter("color_tint", Color(0.82, 0.92, 0.78))
-			sm.set_shader_parameter("warm_var_tint", Color(1.06, 1.08, 0.88))
-			sm.set_shader_parameter("alpha_scissor", 0.38)
-			sm.set_shader_parameter("roughness_val", 0.64)
-			sm.set_shader_parameter("backlight_strength", 0.42)
-			sm.set_shader_parameter("sky_normal_blend", 0.34)
+			sm.set_shader_parameter("tex_alb", _get_spruce_bough_texture())
+			var spruce_nor := AssetCatalog._load_texture_safe("res://assets/downloaded/textures/fir_twig/nor_gl.jpg")
+			sm.set_shader_parameter("tex_nor", spruce_nor if spruce_nor != null else _get_flat_normal_texture())
+			sm.set_shader_parameter("use_embedded_rgba", 1.0)
+			sm.set_shader_parameter("use_normal_map", 1.0 if spruce_nor != null else 0.0)
+			sm.set_shader_parameter("color_tint", Color(0.84, 0.94, 0.78))
+			sm.set_shader_parameter("warm_var_tint", Color(1.06, 1.06, 0.88))
+			sm.set_shader_parameter("alpha_scissor", 0.35)
+			sm.set_shader_parameter("backlight_strength", 0.34)
+			sm.set_shader_parameter("sky_normal_blend", 0.28)
 			sm.set_shader_parameter("wind_strength", 0.72)
 
 		TreeSpecies.PINE:
 			sm.set_shader_parameter("tex_alb", _get_pine_bough_texture())
 			sm.set_shader_parameter("tex_nor", _get_flat_normal_texture())
 			sm.set_shader_parameter("use_embedded_rgba", 1.0)
-			sm.set_shader_parameter("color_tint", Color(0.94, 1.02, 0.86))
-			sm.set_shader_parameter("warm_var_tint", Color(1.10, 1.06, 0.86))
+			sm.set_shader_parameter("color_tint", Color(0.88, 0.98, 0.80))
+			sm.set_shader_parameter("warm_var_tint", Color(1.08, 1.05, 0.86))
 			sm.set_shader_parameter("alpha_scissor", 0.36)
-			sm.set_shader_parameter("roughness_val", 0.60)
-			sm.set_shader_parameter("backlight_strength", 0.48)
-			sm.set_shader_parameter("sky_normal_blend", 0.40)
+			sm.set_shader_parameter("backlight_strength", 0.36)
+			sm.set_shader_parameter("sky_normal_blend", 0.32)
 			sm.set_shader_parameter("wind_strength", 0.85)
 
 		TreeSpecies.BIRCH:
 			sm.set_shader_parameter("tex_alb", _get_birch_spray_texture())
 			sm.set_shader_parameter("tex_nor", _get_flat_normal_texture())
 			sm.set_shader_parameter("use_embedded_rgba", 1.0)
-			sm.set_shader_parameter("color_tint", Color(0.95, 1.04, 0.78))
-			sm.set_shader_parameter("warm_var_tint", Color(1.24, 1.12, 0.68))
+			sm.set_shader_parameter("color_tint", Color(0.82, 0.94, 0.68))
+			sm.set_shader_parameter("warm_var_tint", Color(1.18, 1.08, 0.72))
 			sm.set_shader_parameter("alpha_scissor", 0.40)
-			sm.set_shader_parameter("roughness_val", 0.54)
-			sm.set_shader_parameter("backlight_strength", 0.78)
-			sm.set_shader_parameter("sky_normal_blend", 0.46)
+			sm.set_shader_parameter("backlight_strength", 0.46)
+			sm.set_shader_parameter("sky_normal_blend", 0.34)
 			sm.set_shader_parameter("wind_strength", 1.15)
 
 		TreeSpecies.OAK:
 			sm.set_shader_parameter("tex_alb", _get_oak_spray_texture())
 			sm.set_shader_parameter("tex_nor", _get_flat_normal_texture())
 			sm.set_shader_parameter("use_embedded_rgba", 1.0)
-			sm.set_shader_parameter("color_tint", Color(0.72, 0.86, 0.62))
-			sm.set_shader_parameter("warm_var_tint", Color(1.16, 1.06, 0.76))
+			sm.set_shader_parameter("color_tint", Color(0.70, 0.85, 0.60))
+			sm.set_shader_parameter("warm_var_tint", Color(1.14, 1.05, 0.78))
 			sm.set_shader_parameter("alpha_scissor", 0.40)
-			sm.set_shader_parameter("roughness_val", 0.58)
-			sm.set_shader_parameter("backlight_strength", 0.56)
-			sm.set_shader_parameter("sky_normal_blend", 0.42)
+			sm.set_shader_parameter("backlight_strength", 0.40)
+			sm.set_shader_parameter("sky_normal_blend", 0.32)
 			sm.set_shader_parameter("wind_strength", 0.82)
 
 		TreeSpecies.MAPLE:
 			sm.set_shader_parameter("tex_alb", _get_maple_spray_texture())
 			sm.set_shader_parameter("tex_nor", _get_flat_normal_texture())
 			sm.set_shader_parameter("use_embedded_rgba", 1.0)
-			sm.set_shader_parameter("color_tint", Color(0.92, 0.98, 0.76))
-			sm.set_shader_parameter("warm_var_tint", Color(1.32, 1.02, 0.64))
+			sm.set_shader_parameter("color_tint", Color(0.82, 0.92, 0.68))
+			sm.set_shader_parameter("warm_var_tint", Color(1.24, 1.02, 0.68))
 			sm.set_shader_parameter("alpha_scissor", 0.40)
-			sm.set_shader_parameter("roughness_val", 0.52)
-			sm.set_shader_parameter("backlight_strength", 0.74)
-			sm.set_shader_parameter("sky_normal_blend", 0.44)
+			sm.set_shader_parameter("backlight_strength", 0.44)
+			sm.set_shader_parameter("sky_normal_blend", 0.34)
 			sm.set_shader_parameter("wind_strength", 0.96)
 
 		TreeSpecies.ASPEN:
 			sm.set_shader_parameter("tex_alb", _get_aspen_spray_texture())
 			sm.set_shader_parameter("tex_nor", _get_flat_normal_texture())
 			sm.set_shader_parameter("use_embedded_rgba", 1.0)
-			sm.set_shader_parameter("color_tint", Color(0.86, 0.98, 0.82))
-			sm.set_shader_parameter("warm_var_tint", Color(1.20, 1.14, 0.72))
+			sm.set_shader_parameter("color_tint", Color(0.78, 0.92, 0.72))
+			sm.set_shader_parameter("warm_var_tint", Color(1.16, 1.10, 0.74))
 			sm.set_shader_parameter("alpha_scissor", 0.40)
-			sm.set_shader_parameter("roughness_val", 0.48)
-			sm.set_shader_parameter("backlight_strength", 0.80)
-			sm.set_shader_parameter("sky_normal_blend", 0.45)
+			sm.set_shader_parameter("backlight_strength", 0.46)
+			sm.set_shader_parameter("sky_normal_blend", 0.34)
 			sm.set_shader_parameter("wind_strength", 1.22)
 			sm.set_shader_parameter("flutter_speed", 9.4)
 			sm.set_shader_parameter("flutter_amp", 0.052)
@@ -1748,12 +1795,11 @@ static func _get_canopy_material(species: int) -> Material:
 			sm.set_shader_parameter("tex_alb", _get_orchard_spray_texture())
 			sm.set_shader_parameter("tex_nor", _get_flat_normal_texture())
 			sm.set_shader_parameter("use_embedded_rgba", 1.0)
-			sm.set_shader_parameter("color_tint", Color(0.80, 0.94, 0.74))
-			sm.set_shader_parameter("warm_var_tint", Color(1.10, 1.06, 0.82))
+			sm.set_shader_parameter("color_tint", Color(0.76, 0.90, 0.68))
+			sm.set_shader_parameter("warm_var_tint", Color(1.10, 1.05, 0.82))
 			sm.set_shader_parameter("alpha_scissor", 0.40)
-			sm.set_shader_parameter("roughness_val", 0.56)
-			sm.set_shader_parameter("backlight_strength", 0.66)
-			sm.set_shader_parameter("sky_normal_blend", 0.44)
+			sm.set_shader_parameter("backlight_strength", 0.42)
+			sm.set_shader_parameter("sky_normal_blend", 0.34)
 			sm.set_shader_parameter("wind_strength", 0.92)
 
 	_canopy_mats[species] = sm
@@ -2155,9 +2201,9 @@ static func _build_gpu_meadow_grass(parent: Node3D, rng: RandomNumberGenerator) 
 			Vector3(gx, gy - 0.02, gz)
 		))
 
-	# Спелые золотистые колосья растут густыми природными куртинами/пачками по 10–20 снопов на солнечных лугах,
-	# у обочин грунтовки и вдоль деревянной пастбищной изгороди — контрастно выделяясь над тёмно-зелёной травой!
-	for _patch in range(280):
+	# Светло-соломенные колосья растут естественными группами по 7–13 стройных пучков на солнечных лугах,
+	# мягко и натурально выделяясь светлой сухой соломой на фоне тёмно-зелёной травы без рыжего/оранжевого оттенка
+	for _patch in range(235):
 		var cx := rng.randf_range(-85.0, 82.0)
 		var cz := rng.randf_range(-85.0, 85.0)
 		if TerrainBuilder.get_forest_factor(cx, cz) > 0.24:
@@ -2169,8 +2215,8 @@ static func _build_gpu_meadow_grass(parent: Node3D, rng: RandomNumberGenerator) 
 		if Vector2(cx, cz).distance_to(Vector2(14.0, -4.0)) < 6.2:
 			continue
 
-		var patch_rad := rng.randf_range(0.90, 2.15)
-		var sheaf_count := rng.randi_range(10, 20)
+		var patch_rad := rng.randf_range(0.95, 2.10)
+		var sheaf_count := rng.randi_range(7, 13)
 		var elong_yaw := rng.randf() * TAU
 		var elong_dir := Vector2(cos(elong_yaw), sin(elong_yaw))
 		var elong_perp := Vector2(-elong_dir.y, elong_dir.x)
@@ -2189,7 +2235,7 @@ static func _build_gpu_meadow_grass(parent: Node3D, rng: RandomNumberGenerator) 
 			if TerrainBuilder.is_inside_building_footprint(sx, sz, 0.55) or _is_inside_homestead_yard(sx, sz, -0.4):
 				continue
 			var sy := TerrainBuilder.get_height(sx, sz)
-			var center_boost := lerpf(1.08, 0.76, r_norm) * rng.randf_range(0.86, 1.12)
+			var center_boost := lerpf(1.00, 0.72, r_norm) * rng.randf_range(0.86, 1.08)
 			var tilt := Vector3(rng.randf_range(-0.07, 0.07), 0.0, rng.randf_range(-0.07, 0.07))
 			var b := (Basis.from_euler(tilt) * Basis(Vector3.UP, rng.randf() * TAU)).scaled(Vector3(center_boost, center_boost, center_boost))
 			stalk_xforms.append(Transform3D(b, Vector3(sx, sy - 0.04, sz)))
@@ -2214,19 +2260,18 @@ static func _create_meadow_seed_stalks_mesh() -> ArrayMesh:
 
 	var rng := RandomNumberGenerator.new()
 	rng.seed = 20260825
-	var stalk_cards := 7
+	var stalk_cards := 5
 	var dome_orig := Vector3(0.0, -0.5, 0.0)
 
 	for c in range(stalk_cards):
-		var yaw := float(c) * (TAU / float(stalk_cards)) + rng.randf_range(-0.20, 0.20)
-		var rad := rng.randf_range(0.03, 0.22)
+		var yaw := float(c) * (TAU / float(stalk_cards)) + rng.randf_range(-0.22, 0.22)
+		var rad := rng.randf_range(0.03, 0.20)
 		var orig := Vector3(cos(yaw) * rad, 0.0, sin(yaw) * rad)
-		# Ось +Z карточки направляем вверх с лёгким раскидистым наклоном спелых колосьев (pitch ~ -74°..-84°)
-		var pitch := deg_to_rad(rng.randf_range(-84.0, -72.0))
+		var pitch := deg_to_rad(rng.randf_range(-85.0, -73.0))
 		var basis := Basis(Vector3.UP, yaw) * Basis(Vector3.RIGHT, pitch)
-		var h := rng.randf_range(1.04, 1.44)
-		var w := h * 0.64
-		_append_curved_bough_card(st, orig, basis, w, h, -0.09 * h, 0.56, 1.0, FULL_SPRAY_POLY, dome_orig, rng.randf(), 0.96)
+		var h := rng.randf_range(0.92, 1.26)
+		var w := h * 0.50
+		_append_curved_bough_card(st, orig, basis, w, h, -0.08 * h, 0.56, 1.0, FULL_SPRAY_POLY, dome_orig, rng.randf(), 0.32)
 
 	st.generate_tangents()
 	var mesh := ArrayMesh.new()
@@ -2243,14 +2288,13 @@ static func _get_meadow_stalks_material() -> Material:
 	sm.set_shader_parameter("tex_alb", _get_meadow_stalk_sheaf_texture())
 	sm.set_shader_parameter("tex_nor", _get_flat_normal_texture())
 	sm.set_shader_parameter("use_embedded_rgba", 1.0)
-	sm.set_shader_parameter("color_tint", Color(0.90, 0.74, 0.34))
-	sm.set_shader_parameter("warm_var_tint", Color(1.08, 0.98, 0.80))
-	sm.set_shader_parameter("alpha_scissor", 0.26)
-	sm.set_shader_parameter("roughness_val", 0.74)
-	sm.set_shader_parameter("backlight_strength", 0.26)
-	sm.set_shader_parameter("sky_normal_blend", 0.26)
+	sm.set_shader_parameter("color_tint", Color(1.0, 1.0, 1.0))
+	sm.set_shader_parameter("warm_var_tint", Color(1.04, 1.02, 0.94))
+	sm.set_shader_parameter("alpha_scissor", 0.32)
+	sm.set_shader_parameter("backlight_strength", 0.14)
+	sm.set_shader_parameter("sky_normal_blend", 0.20)
 	sm.set_shader_parameter("border_shade_strength", 0.0)
-	sm.set_shader_parameter("wind_strength", 1.38)
+	sm.set_shader_parameter("wind_strength", 1.35)
 	_meadow_stalks_mat = sm
 	return sm
 
@@ -2285,31 +2329,30 @@ static func _extract_golden_panicle_stamp(
 
 	for y in range(target_h):
 		var v_norm := float(y) / float(target_h)
-		# Плавный переход от тёплой соломы стебля внизу к спелому пшенично-золотистому колосу наверху!
-		var ear_t := 1.0 - smoothstep(0.45, 0.88, v_norm)
+		# Плавный переход от оливково-травянистого стебля снизу к натуральной приглушённо-соломенной метёлке наверху
+		var ear_t := 1.0 - smoothstep(0.38, 0.84, v_norm)
 		for x in range(target_w):
 			var a_c := ac.get_pixel(x, y).r
-			# Мягкое утолщение тонких остей и колосков на 1 пиксель, чтобы mipmap-уровни вдали не съедали метёлки!
 			var a_max := a_c
 			if x > 0 and x < target_w - 1 and y > 0 and y < target_h - 1:
-				a_max = maxf(a_max, ac.get_pixel(x - 1, y).r * 0.82)
-				a_max = maxf(a_max, ac.get_pixel(x + 1, y).r * 0.82)
-				a_max = maxf(a_max, ac.get_pixel(x, y - 1).r * 0.76)
-				a_max = maxf(a_max, ac.get_pixel(x, y + 1).r * 0.76)
-			if a_max < 0.11:
+				a_max = maxf(a_max, ac.get_pixel(x - 1, y).r * 0.66)
+				a_max = maxf(a_max, ac.get_pixel(x + 1, y).r * 0.66)
+				a_max = maxf(a_max, ac.get_pixel(x, y - 1).r * 0.60)
+				a_max = maxf(a_max, ac.get_pixel(x, y + 1).r * 0.60)
+			if a_max < 0.14:
 				out.set_pixel(x, y, bleed)
 			else:
 				var raw_c := dc.get_pixel(x, y)
-				var inv := 1.0 / maxf(a_c, 0.34)
-				var lum := clampf((raw_c.r * 0.32 + raw_c.g * 0.56 + raw_c.b * 0.12) * inv, 0.28, 1.0)
-				var stem_straw := Color(0.45, 0.37, 0.15) * (0.74 + 0.36 * lum)
-				var ripe_ear := Color(0.68, 0.52, 0.18).lerp(Color(0.82, 0.66, 0.26), smoothstep(0.50, 0.92, lum))
-				var gold_col := stem_straw.lerp(ripe_ear, ear_t)
-				var final_a := clampf(pow((a_max - 0.10) / 0.90, 0.58), 0.0, 1.0)
+				var inv := 1.0 / maxf(a_c, 0.38)
+				var lum := clampf((raw_c.r * 0.32 + raw_c.g * 0.56 + raw_c.b * 0.12) * inv, 0.22, 1.0)
+				var stem_straw := Color(0.26, 0.34, 0.16).lerp(Color(0.39, 0.42, 0.23), lum)
+				var ripe_ear := Color(0.45, 0.43, 0.26).lerp(Color(0.57, 0.54, 0.34), smoothstep(0.44, 0.92, lum))
+				var straw_col := stem_straw.lerp(ripe_ear, ear_t)
+				var final_a := clampf(pow((a_max - 0.13) / 0.87, 0.78), 0.0, 1.0)
 				out.set_pixel(x, y, Color(
-					clampf(gold_col.r, 0.0, 1.0),
-					clampf(gold_col.g, 0.0, 1.0),
-					clampf(gold_col.b, 0.0, 1.0),
+					clampf(straw_col.r, 0.0, 1.0),
+					clampf(straw_col.g, 0.0, 1.0),
+					clampf(straw_col.b, 0.0, 1.0),
 					final_a
 				))
 	return out
@@ -2320,35 +2363,32 @@ static func _get_meadow_stalk_sheaf_texture() -> Texture2D:
 		return _meadow_stalk_sheaf_tex
 	var rm := _get_spray_res_mult()
 	var m := float(rm)
-	var bleed := Color(0.68, 0.52, 0.18, 0.0)
+	var bleed := Color(0.46, 0.44, 0.27, 0.0)
 	var d_img := _load_image_any("res://assets/downloaded/textures/meadow_stalks/diff.jpg")
 	var a_img := _load_image_any("res://assets/downloaded/textures/meadow_stalks/alpha.jpg")
 
-	# Собираем пышный сноп из 3 реальных фотосканированных метёлок злаков (ambientCG Foliage003)
-	var pan_a := _extract_golden_panicle_stamp(d_img, a_img, Rect2(0.198, 0.132, 0.322, 0.680), 340 * rm, 740 * rm, bleed)
-	var pan_b := _extract_golden_panicle_stamp(d_img, a_img, Rect2(0.520, 0.132, 0.232, 0.675), 270 * rm, 730 * rm, bleed)
-	var pan_c := _extract_golden_panicle_stamp(d_img, a_img, Rect2(0.734, 0.148, 0.242, 0.675), 290 * rm, 740 * rm, bleed)
+	# Воздушный ажурный пучок из реальных фотосканированных метёлок луговых злаков (ambientCG Foliage003)
+	var pan_a := _extract_golden_panicle_stamp(d_img, a_img, Rect2(0.198, 0.132, 0.322, 0.680), 290 * rm, 720 * rm, bleed)
+	var pan_b := _extract_golden_panicle_stamp(d_img, a_img, Rect2(0.520, 0.132, 0.232, 0.675), 240 * rm, 710 * rm, bleed)
+	var pan_c := _extract_golden_panicle_stamp(d_img, a_img, Rect2(0.734, 0.148, 0.242, 0.675), 260 * rm, 720 * rm, bleed)
 	var pan_c_flip := pan_c.duplicate() as Image
 	pan_c_flip.flip_x()
 
-	var pan_l24 := _rotate_rgba_stamp(pan_c_flip, deg_to_rad(-23.0), bleed)
-	var pan_r24 := _rotate_rgba_stamp(pan_c, deg_to_rad(23.0), bleed)
-	var pan_l13 := _rotate_rgba_stamp(pan_a, deg_to_rad(-12.0), bleed)
-	var pan_r13 := _rotate_rgba_stamp(pan_b, deg_to_rad(13.0), bleed)
+	var pan_l20 := _rotate_rgba_stamp(pan_c_flip, deg_to_rad(-19.0), bleed)
+	var pan_r20 := _rotate_rgba_stamp(pan_c, deg_to_rad(19.0), bleed)
+	var pan_l09 := _rotate_rgba_stamp(pan_a, deg_to_rad(-9.0), bleed)
+	var pan_r09 := _rotate_rgba_stamp(pan_b, deg_to_rad(9.0), bleed)
 
 	var csize := 1024 * rm
 	var canvas := Image.create(csize, csize, false, Image.FORMAT_RGBA8)
 	canvas.fill(bleed)
 
 	for spec in [
-		[Vector2(255, 585), pan_l24],
-		[Vector2(770, 580), pan_r24],
-		[Vector2(355, 520), pan_l13],
-		[Vector2(675, 515), pan_r13],
-		[Vector2(435, 485), pan_c_flip],
-		[Vector2(595, 480), pan_c],
-		[Vector2(512, 435), pan_b],
-		[Vector2(485, 545), pan_a],
+		[Vector2(245, 575), pan_l20],
+		[Vector2(780, 570), pan_r20],
+		[Vector2(385, 505), pan_l09],
+		[Vector2(645, 500), pan_r09],
+		[Vector2(512, 445), pan_b],
 	]:
 		var pt: Vector2 = (spec[0] as Vector2) * m
 		_stamp_centered(canvas, spec[1], Vector2i(int(pt.x), int(pt.y)))
@@ -2425,7 +2465,7 @@ static func _get_meadow_grass_material() -> Material:
 	var sh := Shader.new()
 	sh.code = """
 shader_type spatial;
-render_mode cull_disabled, diffuse_burley;
+render_mode cull_disabled, diffuse_burley, specular_disabled;
 
 varying float v_height;
 varying float v_patch;
@@ -2446,17 +2486,18 @@ void vertex() {
 
 void fragment() {
 	vec3 root_col = vec3(0.022, 0.078, 0.018);
-	vec3 mid_green = mix(vec3(0.055, 0.190, 0.042), vec3(0.095, 0.250, 0.058), v_patch);
-	vec3 tip_green = mix(vec3(0.125, 0.295, 0.068), vec3(0.185, 0.355, 0.092), smoothstep(0.30, 0.85, v_patch + (v_seed - 0.5) * 0.35));
+	vec3 mid_green = mix(vec3(0.055, 0.185, 0.042), vec3(0.092, 0.242, 0.056), v_patch);
+	vec3 tip_green = mix(vec3(0.118, 0.282, 0.064), vec3(0.172, 0.335, 0.086), smoothstep(0.30, 0.85, v_patch + (v_seed - 0.5) * 0.35));
 
 	vec3 col = mix(root_col, mid_green, smoothstep(0.0, 0.45, v_height));
 	col = mix(col, tip_green, smoothstep(0.48, 1.0, v_height));
 
 	ALBEDO = col;
-	ROUGHNESS = 0.72;
-	SPECULAR = 0.08;
+	ROUGHNESS = 1.0;
+	SPECULAR = 0.0;
+	METALLIC = 0.0;
 	AO = mix(0.28, 1.0, v_height);
-	BACKLIGHT = col * (0.32 + 0.42 * v_height);
+	BACKLIGHT = col * (0.28 + 0.36 * v_height);
 }
 """
 	var sm := ShaderMaterial.new()

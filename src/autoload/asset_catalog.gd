@@ -148,13 +148,13 @@ func _get_alpha_cutout_shader() -> Shader:
 	var sh := Shader.new()
 	sh.code = """
 shader_type spatial;
-render_mode cull_disabled, diffuse_burley, specular_schlick_ggx;
+render_mode cull_disabled, diffuse_burley, specular_disabled, alpha_to_coverage;
 
 uniform sampler2D tex_alb : source_color, filter_linear_mipmap_anisotropic, repeat_enable;
 uniform sampler2D tex_alpha : hint_default_white, filter_linear_mipmap_anisotropic, repeat_enable;
 uniform sampler2D tex_nor : hint_normal, filter_linear_mipmap_anisotropic, repeat_enable;
 uniform sampler2D tex_arm : hint_default_white, filter_linear_mipmap_anisotropic, repeat_enable;
-uniform float alpha_Threshold = 0.42;
+uniform float alpha_Threshold = 0.38;
 uniform float backlight_strength = 0.40;
 uniform float use_ao = 1.0;
 
@@ -184,8 +184,8 @@ void fragment() {
 	float raw_ao = (arm.r < 0.08) ? 1.0 : mix(0.65, 1.0, arm.r);
 	AO = mix(1.0, raw_ao, use_ao);
 	AO_LIGHT_AFFECT = 0.25;
-	ROUGHNESS = clamp(arm.g * 1.18, 0.48, 0.95);
-	SPECULAR = 0.20;
+	ROUGHNESS = 1.0;
+	SPECULAR = 0.0;
 	METALLIC = 0.0;
 	BACKLIGHT = alb * backlight_strength;
 }

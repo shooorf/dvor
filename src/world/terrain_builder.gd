@@ -444,8 +444,8 @@ void fragment() {
 	vec3 g1_raw = mix(ga1, ga2, gw);
 	float lum1 = dot(g1_raw, vec3(0.30, 0.58, 0.12));
 	float twig_mask1 = smoothstep(0.012, 0.055, g1_raw.r - g1_raw.g * 0.96);
-	vec3 g1_moss = mix(vec3(0.076, 0.162, 0.042), vec3(0.148, 0.288, 0.074), clamp(lum1 * 5.6, 0.0, 1.0)) * mix(0.88, 1.15, macro_s);
-	vec3 g1_twig = mix(vec3(0.135, 0.102, 0.062), vec3(0.255, 0.198, 0.122), clamp(lum1 * 5.2, 0.0, 1.0));
+	vec3 g1_moss = mix(vec3(0.056, 0.122, 0.032), vec3(0.114, 0.218, 0.056), clamp(lum1 * 5.6, 0.0, 1.0)) * mix(0.88, 1.14, macro_s);
+	vec3 g1_twig = mix(vec3(0.122, 0.092, 0.056), vec3(0.232, 0.180, 0.110), clamp(lum1 * 5.2, 0.0, 1.0));
 	vec3 g1_alb = mix(g1_moss, g1_twig, twig_mask1 * 0.88);
 	vec3 g1_nor = mix(texture(grass_nor, guv_a).rgb, texture(grass_nor, guv_b).rgb, gw);
 	vec3 g1_arm = mix(g_arm1, g_arm2, gw);
@@ -455,8 +455,8 @@ void fragment() {
 	vec3 m2_raw = texture(meadow2_alb, m2_uv).rgb;
 	float lum2 = dot(m2_raw, vec3(0.30, 0.58, 0.12));
 	float pebble_mask = smoothstep(0.015, 0.085, m2_raw.b - m2_raw.g * 0.78);
-	vec3 m2_moss = mix(vec3(0.080, 0.168, 0.044), vec3(0.154, 0.296, 0.078), clamp(lum2 * 5.0, 0.0, 1.0)) * mix(0.90, 1.14, macro_s);
-	vec3 m2_pebble = mix(vec3(0.150, 0.158, 0.148), vec3(0.280, 0.288, 0.274), clamp(lum2 * 4.8, 0.0, 1.0));
+	vec3 m2_moss = mix(vec3(0.060, 0.128, 0.034), vec3(0.118, 0.224, 0.058), clamp(lum2 * 5.0, 0.0, 1.0)) * mix(0.90, 1.13, macro_s);
+	vec3 m2_pebble = mix(vec3(0.140, 0.148, 0.138), vec3(0.258, 0.266, 0.252), clamp(lum2 * 4.8, 0.0, 1.0));
 	vec3 m2_alb = mix(m2_moss, m2_pebble, pebble_mask * 0.88);
 	vec3 m2_nor = texture(meadow2_nor, m2_uv).rgb;
 	vec3 m2_arm = texture(meadow2_arm, m2_uv).rgb;
@@ -470,9 +470,9 @@ void fragment() {
 	float lum_f = dot(fa_raw, vec3(0.30, 0.58, 0.12));
 	float twig_mask_f = smoothstep(0.012, 0.055, fa_raw.r - fa_raw.g * 0.94);
 	float crack_mask_f = 1.0 - smoothstep(0.24, 0.54, f_arm.r);
-	vec3 fa_clod_green = mix(vec3(0.072, 0.156, 0.040), vec3(0.152, 0.292, 0.076), clamp(lum_f * 4.8, 0.0, 1.0)) * mix(0.86, 1.16, macro_s);
-	vec3 fa_twig_brown = mix(vec3(0.145, 0.110, 0.066), vec3(0.268, 0.208, 0.128), clamp(lum_f * 4.6, 0.0, 1.0));
-	vec3 f_meadow_clods = mix(fa_clod_green, vec3(0.044, 0.060, 0.030), crack_mask_f * 0.68);
+	vec3 fa_clod_green = mix(vec3(0.054, 0.118, 0.030), vec3(0.116, 0.220, 0.056), clamp(lum_f * 4.8, 0.0, 1.0)) * mix(0.86, 1.15, macro_s);
+	vec3 fa_twig_brown = mix(vec3(0.132, 0.100, 0.060), vec3(0.242, 0.188, 0.116), clamp(lum_f * 4.6, 0.0, 1.0));
+	vec3 f_meadow_clods = mix(fa_clod_green, vec3(0.036, 0.050, 0.024), crack_mask_f * 0.68);
 	f_meadow_clods = mix(f_meadow_clods, fa_twig_brown, twig_mask_f * 0.90);
 
 	float clod_mix = smoothstep(0.26, 0.66, vnoise(v_world_pos.xz * 0.42 + vec2(-8.2, 4.9)) + (gm_arm.r - f_arm.r) * 0.42) * 0.62;
