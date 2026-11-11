@@ -40,24 +40,26 @@ func _build_3d_backdrop() -> void:
 	if hdri != null:
 		var sm := PanoramaSkyMaterial.new()
 		sm.panorama = hdri
-		sm.energy_multiplier = 1.02
+		sm.energy_multiplier = 0.85
 		sky.sky_material = sm
 	else:
 		var psm := ProceduralSkyMaterial.new()
-		psm.sky_top_color = Color(0.24, 0.44, 0.72)
-		psm.sky_horizon_color = Color(0.94, 0.74, 0.52)
+		psm.sky_top_color = Color(0.22, 0.42, 0.70)
+		psm.sky_horizon_color = Color(0.62, 0.70, 0.76)
 		sky.sky_material = psm
 	env.background_mode = Environment.BG_SKY
 	env.sky = sky
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
-	env.ambient_light_sky_contribution = 0.82
+	env.ambient_light_color = Color(0.20, 0.32, 0.50)
+	env.ambient_light_sky_contribution = 0.34
+	env.ambient_light_energy = 0.62
 	world_env.environment = env
 	add_child(world_env)
 
 	var sun := DirectionalLight3D.new()
-	sun.light_color = Color(1.0, 0.88, 0.72)
-	sun.light_energy = 2.15
-	sun.rotation_degrees = Vector3(-25.0, -48.0, 0.0)
+	sun.light_color = Color(1.0, 0.92, 0.79)
+	sun.light_energy = 1.48
+	sun.rotation_degrees = Vector3(-36.0, -45.0, 0.0)
 	sun.shadow_enabled = true
 	add_child(sun)
 

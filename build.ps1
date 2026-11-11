@@ -17,7 +17,8 @@ $NeedSetup = (-not (Test-Path $GodotConsole)) -or (-not (Test-Path $ManifestPath
 if (-not $NeedSetup) {
     try {
         $ManifestObj = Get-Content $ManifestPath -Raw | ConvertFrom-Json
-        if ($ManifestObj.pack_version -ne $ExpectedPackVersion) {
+        if (($ManifestObj.pack_version -ne $ExpectedPackVersion) -or ($ManifestObj.quality -ne $Quality)) {
+            Write-Host "Updating asset pack to v$ExpectedPackVersion ($Quality)..." -ForegroundColor Yellow
             $NeedSetup = $true
         }
     } catch {
@@ -28,6 +29,22 @@ if (-not $NeedSetup) {
 if ($NeedSetup) {
     & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $RootDir "setup.ps1") -Quality $Quality
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+} else {
+    $PatchedImports = 0
+    Get-ChildItem -Path (Join-Path $RootDir "assets\downloaded") -Recurse -Include "*.jpg.import", "*.png.import" -ErrorAction SilentlyContinue | ForEach-Object {
+        $raw = Get-Content $_.FullName -Raw
+        $updated = $raw -replace "mipmaps/generate=false", "mipmaps/generate=true"
+        if ($_.Name -match "nor_gl") { $updated = $updated -replace "compress/normal_map=0", "compress/normal_map=1" }
+        if ($updated -ne $raw) {
+            Set-Content -Path $_.FullName -Value $updated -NoNewline -Encoding UTF8
+            $PatchedImports++
+        }
+    }
+    if ($PatchedImports -gt 0) {
+        Write-Host "Upgrading $PatchedImports 4K textures with 3D mipmaps & normal maps..." -ForegroundColor Cyan
+        & $GodotConsole --headless --path $RootDir --import
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    }
 }
 
 $TemplatesDir = Join-Path $env:APPDATA "Godot\export_templates\$TemplateVerDirName"

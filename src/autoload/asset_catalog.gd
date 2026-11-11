@@ -136,6 +136,7 @@ const SANDBOX_ITEMS: Array[Dictionary] = [
 ]
 
 var _material_cache: Dictionary = {}
+var _texture_cache: Dictionary = {}
 var _scene_cache: Dictionary = {}
 var _submesh_cache: Dictionary = {}
 var _alpha_cutout_shader: Shader = null
@@ -183,8 +184,9 @@ void fragment() {
 	float raw_ao = (arm.r < 0.08) ? 1.0 : mix(0.65, 1.0, arm.r);
 	AO = mix(1.0, raw_ao, use_ao);
 	AO_LIGHT_AFFECT = 0.25;
-	ROUGHNESS = clamp(arm.g, 0.35, 0.95);
-	METALLIC = arm.b * 0.1;
+	ROUGHNESS = clamp(arm.g * 1.18, 0.48, 0.95);
+	SPECULAR = 0.20;
+	METALLIC = 0.0;
 	BACKLIGHT = alb * backlight_strength;
 }
 """
@@ -574,16 +576,31 @@ func load_sky_hdri() -> Texture2D:
 
 
 func _load_texture_safe(res_path: String) -> Texture2D:
+	if _texture_cache.has(res_path):
+		return _texture_cache[res_path]
 	if ResourceLoader.exists(res_path):
 		var res := load(res_path)
 		if res is Texture2D:
-			return res as Texture2D
+			var tex := res as Texture2D
+			if not tex.has_mipmaps() and not res_path.ends_with(".hdr"):
+				var im := tex.get_image()
+				if im != null and not im.is_empty():
+					if im.is_compressed():
+						im.decompress()
+					im.generate_mipmaps()
+					var mip_tex := ImageTexture.create_from_image(im)
+					_texture_cache[res_path] = mip_tex
+					return mip_tex
+			_texture_cache[res_path] = tex
+			return tex
 	var abs_path := ProjectSettings.globalize_path(res_path)
 	if FileAccess.file_exists(abs_path):
 		var img := Image.load_from_file(abs_path)
 		if img != null and not img.is_empty():
 			img.generate_mipmaps()
-			return ImageTexture.create_from_image(img)
+			var file_tex := ImageTexture.create_from_image(img)
+			_texture_cache[res_path] = file_tex
+			return file_tex
 	return null
 
 

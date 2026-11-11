@@ -65,56 +65,59 @@ func apply_preset(preset: int) -> void:
 		_registered_sun.shadow_enabled = true
 		_registered_sun.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_4_SPLITS
 		_registered_sun.directional_shadow_blend_splits = true
+		_registered_sun.directional_shadow_split_1 = 0.07
+		_registered_sun.directional_shadow_split_2 = 0.19
+		_registered_sun.directional_shadow_split_3 = 0.44
 		match preset:
 			Preset.ULTRA_4070:
-				_registered_sun.directional_shadow_max_distance = 155.0
-				_registered_sun.shadow_blur = 1.20
+				_registered_sun.directional_shadow_max_distance = 96.0
+				_registered_sun.shadow_blur = 0.55
 			Preset.HIGH:
-				_registered_sun.directional_shadow_max_distance = 120.0
-				_registered_sun.shadow_blur = 1.05
+				_registered_sun.directional_shadow_max_distance = 86.0
+				_registered_sun.shadow_blur = 0.55
 			Preset.MEDIUM:
-				_registered_sun.directional_shadow_max_distance = 85.0
-				_registered_sun.shadow_blur = 0.8
+				_registered_sun.directional_shadow_max_distance = 72.0
+				_registered_sun.shadow_blur = 0.50
 
 	if _registered_env != null:
-		_registered_env.tonemap_mode = Environment.TONE_MAPPER_AGX
-		_registered_env.tonemap_exposure = 1.04
+		# Кинематографичный ACES сохраняет глубокие тени, насыщенную лесную зелень и микроконтраст коры/земли
+		_registered_env.tonemap_mode = Environment.TONE_MAPPER_ACES
+		_registered_env.tonemap_exposure = 1.0
 		_registered_env.glow_enabled = true
-		_registered_env.glow_intensity = 0.38
-		_registered_env.glow_bloom = 0.06
+		_registered_env.glow_intensity = 0.24
+		_registered_env.glow_bloom = 0.03
 		_registered_env.glow_blend_mode = Environment.GLOW_BLEND_MODE_SOFTLIGHT
+		# Лёгкая воздушная перспектива ТОЛЬКО вдалеке (вблизи 0..52 м идеальная прозрачность и контраст без молочной пелены!)
+		_registered_env.volumetric_fog_enabled = false
+		_registered_env.fog_enabled = (preset != Preset.MEDIUM)
+		_registered_env.fog_mode = Environment.FOG_MODE_DEPTH
+		_registered_env.fog_depth_begin = 52.0
+		_registered_env.fog_depth_end = 195.0
+		_registered_env.fog_light_color = Color(0.62, 0.72, 0.82)
+		_registered_env.fog_density = 1.0
+		_registered_env.fog_sky_affect = 0.18
 
 		match preset:
 			Preset.ULTRA_4070:
 				_registered_env.sdfgi_enabled = false
 				_registered_env.ssao_enabled = true
-				_registered_env.ssao_radius = 1.35
-				_registered_env.ssao_intensity = 2.0
+				_registered_env.ssao_radius = 1.15
+				_registered_env.ssao_intensity = 2.35
 				_registered_env.ssil_enabled = true
-				_registered_env.ssil_radius = 4.2
-				_registered_env.ssil_intensity = 0.95
-				_registered_env.ssr_enabled = true
-				_registered_env.ssr_max_steps = 40
-				_registered_env.volumetric_fog_enabled = true
-				_registered_env.volumetric_fog_density = 0.0038
-				_registered_env.volumetric_fog_albedo = Color(0.98, 0.90, 0.78)
-				_registered_env.volumetric_fog_anisotropy = 0.62
+				_registered_env.ssil_radius = 3.8
+				_registered_env.ssil_intensity = 0.65
+				_registered_env.ssr_enabled = false
 			Preset.HIGH:
 				_registered_env.sdfgi_enabled = false
 				_registered_env.ssao_enabled = true
-				_registered_env.ssao_radius = 1.2
-				_registered_env.ssao_intensity = 1.8
+				_registered_env.ssao_radius = 1.10
+				_registered_env.ssao_intensity = 2.10
 				_registered_env.ssil_enabled = false
-				_registered_env.ssr_enabled = true
-				_registered_env.ssr_max_steps = 32
-				_registered_env.volumetric_fog_enabled = true
-				_registered_env.volumetric_fog_density = 0.0034
-				_registered_env.volumetric_fog_albedo = Color(0.97, 0.89, 0.78)
+				_registered_env.ssr_enabled = false
 			Preset.MEDIUM:
 				_registered_env.sdfgi_enabled = false
 				_registered_env.ssao_enabled = false
 				_registered_env.ssil_enabled = false
 				_registered_env.ssr_enabled = false
-				_registered_env.volumetric_fog_enabled = false
 
 	preset_changed.emit(current_preset)

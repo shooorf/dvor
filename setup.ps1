@@ -46,4 +46,27 @@ if ($LASTEXITCODE -ne 0) {
     throw "Godot asset import failed with exit code $LASTEXITCODE"
 }
 
+$PatchedImports = 0
+Get-ChildItem -Path (Join-Path $RootDir "assets\downloaded") -Recurse -Include "*.jpg.import", "*.png.import" | ForEach-Object {
+    $raw = Get-Content $_.FullName -Raw
+    $updated = $raw
+    if ($updated -match "mipmaps/generate=false") {
+        $updated = $updated -replace "mipmaps/generate=false", "mipmaps/generate=true"
+    }
+    if (($_.Name -match "nor_gl") -and ($updated -match "compress/normal_map=0")) {
+        $updated = $updated -replace "compress/normal_map=0", "compress/normal_map=1"
+    }
+    if ($updated -ne $raw) {
+        Set-Content -Path $_.FullName -Value $updated -NoNewline -Encoding UTF8
+        $PatchedImports++
+    }
+}
+if ($PatchedImports -gt 0) {
+    Write-Host "Enabled 3D mipmaps & normal maps on $PatchedImports textures - re-importing..." -ForegroundColor Cyan
+    & $GodotConsole --headless --path $RootDir --import
+    if ($LASTEXITCODE -ne 0) {
+        throw "Godot mipmap re-import failed with exit code $LASTEXITCODE"
+    }
+}
+
 Write-Host "`nSetup complete! Run .\run.bat to play or .\build.bat to build standalone .exe for friends." -ForegroundColor Green

@@ -94,11 +94,11 @@ static func populate_world_foliage(parent: Node3D, rng: RandomNumberGenerator) -
 	root.name = "RealisticFoliageSystem"
 	parent.add_child(root)
 
-	_build_trees_and_trunks(root, rng)
+	var placed_trees := _build_trees_and_trunks(root, rng)
 
 	if DisplayServer.get_name() != "headless":
 		_populate_young_conifer_saplings(root, rng)
-		_build_photoscanned_undergrowth(root, rng)
+		_build_photoscanned_undergrowth(root, rng, placed_trees)
 		_build_gpu_meadow_grass(root, rng)
 
 
@@ -106,7 +106,7 @@ static func populate_world_foliage(parent: Node3D, rng: RandomNumberGenerator) -
 # 1. 7 ПОРОД ВЗРОСЛЫХ БОТАНИЧЕСКИХ ДЕРЕВЬЕВ + КОЛЛАЙДЕРЫ СТВОЛОВ
 # ============================================================================
 
-static func _build_trees_and_trunks(parent: Node3D, rng: RandomNumberGenerator) -> void:
+static func _build_trees_and_trunks(parent: Node3D, rng: RandomNumberGenerator) -> Array[Vector2]:
 	var trunk_bodies := StaticBody3D.new()
 	trunk_bodies.name = "TreeTrunkColliders"
 	trunk_bodies.collision_layer = 1
@@ -245,7 +245,7 @@ static func _build_trees_and_trunks(parent: Node3D, rng: RandomNumberGenerator) 
 	_populate_fallen_logs_and_stumps(parent, trunk_bodies, rng)
 
 	if DisplayServer.get_name() == "headless":
-		return
+		return placed_trees
 
 	var trees_group := Node3D.new()
 	trees_group.name = "ForestTreeChunks"
@@ -266,6 +266,7 @@ static func _build_trees_and_trunks(parent: Node3D, rng: RandomNumberGenerator) 
 				true,
 				50.0
 			)
+	return placed_trees
 
 
 static func _can_place_tree_at(x: float, z: float, existing: Array[Vector2], min_dist: float) -> bool:
@@ -1577,7 +1578,11 @@ static func _assign_foliage_textures(sm: ShaderMaterial, tex_folder: String) -> 
 # 2. 6 ВИДОВ ПЫШНЫХ КУСТАРНИКОВ + КРАПИВА, ЧИСТОТЕЛ 4.3K, ПАПОРОТНИК И ОДУВАНЧИКИ 23.5K
 # ============================================================================
 
-static func _build_photoscanned_undergrowth(parent: Node3D, rng: RandomNumberGenerator) -> void:
+static func _build_photoscanned_undergrowth(
+	parent: Node3D,
+	rng: RandomNumberGenerator,
+	placed_trees: Array[Vector2] = []
+) -> void:
 	var shrub1 := AssetCatalog.get_model_submeshes("res://assets/downloaded/models/shrub_01/model.gltf")
 	var shrub2 := AssetCatalog.get_model_submeshes("res://assets/downloaded/models/shrub_02/model.gltf")
 	var shrub3 := AssetCatalog.get_model_submeshes("res://assets/downloaded/models/shrub_03/model.gltf")
@@ -1725,26 +1730,103 @@ static func _build_photoscanned_undergrowth(parent: Node3D, rng: RandomNumberGen
 		if dandelions.size() > 2 and not dandelion_mid_xf.is_empty():
 			_add_multimesh_batch(parent, "PhotoscannedDandelionsMeadow", dandelions[2], dandelion_mid_xf, 68.0, false, 32.0)
 
-	# В) Лесные папоротники и цветущие куртинки кислицы/клевера (shrub_sorrel_01) под пологом леса
+	# В) Лесные папоротники, цветущие куртинки кислицы (shrub_sorrel_01) и ЖИВОПИСНЫЕ БОТАНИЧЕСКИЕ КЛАСТЕРЫ
+	#    прямо у корней деревьев и вдоль лесных тропинок (куст + папоротник + кислица + дернина с метёлками!)
 	var fern_xf: Array[Transform3D] = []
 	var sorrel_xf: Array[Transform3D] = []
+	var gm1_xf: Array[Transform3D] = []
+	var gm2_xf: Array[Transform3D] = []
+	var bermuda_xf: Array[Transform3D] = []
+
+	# 1) Многоярусные природные группы вокруг стволов деревьев (как в живом смешанном лесу!)
+	for t_idx in range(placed_trees.size()):
+		if rng.randf() > 0.62:
+			continue
+		var tp: Vector2 = placed_trees[t_idx]
+		var ff_t := TerrainBuilder.get_forest_factor(tp.x, tp.y)
+		var base_ang := rng.randf() * TAU
+		var bush_p := tp + Vector2(cos(base_ang), sin(base_ang)) * rng.randf_range(0.75, 1.55)
+		if TerrainBuilder.get_road_distance(bush_p.x, bush_p.y) > 3.6 and TerrainBuilder.get_footpath_distance(bush_p.x, bush_p.y) > 1.35 and not TerrainBuilder.is_inside_building_footprint(bush_p.x, bush_p.y, 1.0):
+			var by := TerrainBuilder.get_height(bush_p.x, bush_p.y) - 0.04
+			if rng.randf() < 0.55:
+				var s4_sc := rng.randf_range(1.45, 2.15)
+				(shrub_buckets[3] as Array).append(Transform3D(Basis(Vector3.UP, rng.randf() * TAU).scaled(Vector3.ONE * s4_sc), Vector3(bush_p.x, by, bush_p.y)))
+			else:
+				var s3_sc := rng.randf_range(1.10, 1.65)
+				(shrub_buckets[2] as Array).append(Transform3D(Basis(Vector3.UP, rng.randf() * TAU).scaled(Vector3.ONE * s3_sc), Vector3(bush_p.x, by, bush_p.y)))
+
+		if ff_t > 0.16:
+			for k in range(3):
+				var fa := base_ang + float(k - 1) * 0.62 + rng.randf_range(-0.2, 0.2)
+				var fp := tp + Vector2(cos(fa), sin(fa)) * rng.randf_range(0.85, 2.05)
+				if TerrainBuilder.get_footpath_distance(fp.x, fp.y) < 1.1 or TerrainBuilder.get_road_distance(fp.x, fp.y) < 3.4:
+					continue
+				var fy_c := TerrainBuilder.get_height(fp.x, fp.y)
+				if k == 0:
+					var f_sc := rng.randf_range(1.55, 2.30)
+					fern_xf.append(Transform3D(Basis(Vector3.UP, rng.randf() * TAU).scaled(Vector3.ONE * f_sc), Vector3(fp.x, fy_c, fp.y)))
+				else:
+					var so_sc := rng.randf_range(2.05, 2.85)
+					sorrel_xf.append(Transform3D(Basis(Vector3.UP, rng.randf() * TAU).scaled(Vector3.ONE * so_sc), Vector3(fp.x, fy_c - 0.01, fp.y)))
+
+	# 2) Живописные бордюры вдоль лесных и садовых тропинок (папоротник + цветущая кислица + низкий кустарник + дернина)
+	for chain in TerrainBuilder.FOOTPATH_CHAINS:
+		for seg_i in range(chain.size() - 1):
+			var p_a: Vector2 = chain[seg_i]
+			var p_b: Vector2 = chain[seg_i + 1]
+			var seg_len := p_a.distance_to(p_b)
+			var dir := (p_b - p_a) / maxf(seg_len, 0.01)
+			var perp := Vector2(-dir.y, dir.x)
+			var n_clusters := int(seg_len / 3.8)
+			for ci in range(n_clusters):
+				var along := (float(ci) + rng.randf_range(0.15, 0.85)) / maxf(float(n_clusters), 1.0)
+				var side_sign := -1.0 if ((ci + seg_i) % 2 == 0) else 1.0
+				var anchor := p_a.lerp(p_b, along) + perp * (side_sign * rng.randf_range(1.55, 2.65))
+				if TerrainBuilder.get_road_distance(anchor.x, anchor.y) < 3.6 or TerrainBuilder.is_inside_building_footprint(anchor.x, anchor.y, 1.0):
+					continue
+				var ff_p := TerrainBuilder.get_forest_factor(anchor.x, anchor.y)
+				var ay := TerrainBuilder.get_height(anchor.x, anchor.y)
+				if ff_p > 0.18:
+					if ci % 2 == 0:
+						var sh_sc := rng.randf_range(1.35, 1.90)
+						(shrub_buckets[3] as Array).append(Transform3D(Basis(Vector3.UP, rng.randf() * TAU).scaled(Vector3.ONE * sh_sc), Vector3(anchor.x, ay - 0.03, anchor.y)))
+					var f_off := anchor + Vector2(rng.randf_range(-0.65, 0.65), rng.randf_range(-0.65, 0.65))
+					fern_xf.append(Transform3D(Basis(Vector3.UP, rng.randf() * TAU).scaled(Vector3.ONE * rng.randf_range(1.55, 2.25)), Vector3(f_off.x, TerrainBuilder.get_height(f_off.x, f_off.y), f_off.y)))
+					for sk in range(2):
+						var s_off := anchor - perp * (side_sign * rng.randf_range(0.25, 0.65)) + dir * rng.randf_range(-0.55, 0.55)
+						sorrel_xf.append(Transform3D(Basis(Vector3.UP, rng.randf() * TAU).scaled(Vector3.ONE * rng.randf_range(2.10, 2.75)), Vector3(s_off.x, TerrainBuilder.get_height(s_off.x, s_off.y) - 0.01, s_off.y)))
+				bermuda_xf.append(Transform3D(Basis(Vector3.UP, rng.randf() * TAU).scaled(Vector3.ONE * rng.randf_range(1.0, 1.42)), Vector3(anchor.x, ay - 0.01, anchor.y)))
+
+	# 3) Фоновое заполнение лесного покрова папоротниками и кислицей
 	for _i in range(2400):
 		var fx := rng.randf_range(-84.0, 86.0)
 		var fz := rng.randf_range(-85.0, 85.0)
 		var ff2 := TerrainBuilder.get_forest_factor(fx, fz)
-		if ff2 < 0.24:
+		if ff2 < 0.22:
 			continue
-		if TerrainBuilder.get_road_distance(fx, fz) < 4.0 or TerrainBuilder.get_footpath_distance(fx, fz) < 1.35:
+		if TerrainBuilder.get_road_distance(fx, fz) < 4.0 or TerrainBuilder.get_footpath_distance(fx, fz) < 1.25:
 			continue
 		if TerrainBuilder.is_inside_building_footprint(fx, fz, 1.0):
 			continue
 		var fy := TerrainBuilder.get_height(fx, fz)
-		if rng.randf() < 0.68:
+		if rng.randf() < 0.62:
 			var fsc := rng.randf_range(1.50, 2.45)
 			fern_xf.append(Transform3D(Basis(Vector3.UP, rng.randf() * TAU).scaled(Vector3(fsc, fsc, fsc)), Vector3(fx, fy, fz)))
 		else:
-			var ssc := rng.randf_range(1.75, 2.75)
+			var ssc := rng.randf_range(1.95, 2.85)
 			sorrel_xf.append(Transform3D(Basis(Vector3.UP, rng.randf() * TAU).scaled(Vector3(ssc, ssc, ssc)), Vector3(fx, fy - 0.01, fz)))
+
+	# Пересобираем низкие кусты с учётом добавленных лесных/тропиночных кластеров (заменяем старый вызов Shrubs_Mid/Low ниже)
+	var old_mid := parent.get_node_or_null("Shrubs_Mid")
+	if old_mid != null:
+		old_mid.free()
+	var old_low := parent.get_node_or_null("Shrubs_Low")
+	if old_low != null:
+		old_low.free()
+	if not shrub3.is_empty():
+		_add_multimesh_batch(parent, "Shrubs_Mid", shrub3[0], shrub_buckets[2], 95.0, true, 36.0)
+	if not shrub4.is_empty():
+		_add_multimesh_batch(parent, "Shrubs_Low", shrub4[0], shrub_buckets[3], 90.0, true, 36.0)
 
 	if not ferns.is_empty() and not fern_xf.is_empty():
 		_add_multimesh_batch(parent, "PhotoscannedFerns", ferns[0], fern_xf, 76.0, false, 34.0)
@@ -1753,10 +1835,6 @@ static func _build_photoscanned_undergrowth(parent: Node3D, rng: RandomNumberGen
 
 	# Г) 3 фотосканированных вида травы: крупные кочки овсяницы (grass_medium_01_large 4.6k!),
 	#    луговые куртины (grass_medium_02) и густая дернина с метёлками (grass_bermuda_01)
-	var gm1_xf: Array[Transform3D] = []
-	var gm2_xf: Array[Transform3D] = []
-	var bermuda_xf: Array[Transform3D] = []
-
 	for _i in range(5200):
 		var gx := rng.randf_range(-84.0, 84.0)
 		var gz := rng.randf_range(-84.0, 84.0)
@@ -1765,12 +1843,14 @@ static func _build_photoscanned_undergrowth(parent: Node3D, rng: RandomNumberGen
 		if rd < 2.85 or pd < 0.92 or TerrainBuilder.is_inside_building_footprint(gx, gz, 0.5):
 			continue
 		var gy := TerrainBuilder.get_height(gx, gz)
+		var ff_g := TerrainBuilder.get_forest_factor(gx, gz)
+		# Под густым пологом леса оставляем чистую хвойно-лиственную подстилку с папоротниками и мхом (без сплошного газона!)
+		if ff_g > 0.45 and rng.randf() < 0.68:
+			continue
 		if pd < 2.6 or rd < 5.2 or Vector2(gx, gz).distance_to(Vector2(14.0, -4.0)) < 9.5:
-			# У тропинок, обочин и вокруг костра — плотная дернина с тонкими звёздочками-метёлками
-			var bsc := rng.randf_range(0.90, 1.48)
+			var bsc := rng.randf_range(0.95, 1.48)
 			bermuda_xf.append(Transform3D(Basis(Vector3.UP, rng.randf() * TAU).scaled(Vector3(bsc, bsc, bsc)), Vector3(gx, gy - 0.01, gz)))
 		elif rng.randf() < 0.45:
-			# Пышные тяжёлые кочки дикой овсяницы (4 626 треугольников на кочку!)
 			var g1sc := rng.randf_range(3.1, 4.9)
 			gm1_xf.append(Transform3D(Basis(Vector3.UP, rng.randf() * TAU).scaled(Vector3(g1sc, g1sc, g1sc)), Vector3(gx, gy - 0.02, gz)))
 		else:
@@ -1800,17 +1880,21 @@ static func _build_gpu_meadow_grass(parent: Node3D, rng: RandomNumberGenerator) 
 		var gz := rng.randf_range(-86.5, 86.5)
 
 		var weights := TerrainBuilder.get_surface_weights(gx, gz)
-		if weights.r > 0.35 or weights.g > 0.42:
+		if weights.r > 0.25 or weights.g > 0.28:
 			continue
-		if TerrainBuilder.is_inside_building_footprint(gx, gz, 0.35):
+		if TerrainBuilder.is_inside_building_footprint(gx, gz, 0.45):
 			continue
-		if weights.b > 0.72 and rng.randf() < 0.62:
+		# В лесу, перелесках и у тропинок НЕ спавним процедурные треугольные травинки —
+		# там видна чёткая лесная подстилка forest_leaves_02 с веточками и настоящие 3D-фотосканы!
+		if weights.b > 0.14 or TerrainBuilder.get_forest_factor(gx, gz) > 0.18:
+			continue
+		if TerrainBuilder.get_footpath_distance(gx, gz) < 2.2 or TerrainBuilder.get_road_distance(gx, gz) < 4.2:
 			continue
 
 		var gy := TerrainBuilder.get_height(gx, gz)
 		var wild_patch := sin(gx * 0.13 + 1.1) * cos(gz * 0.15 - 0.6)
-		var h_scale := rng.randf_range(0.85, 1.55) if (wild_patch > 0.25) else rng.randf_range(0.48, 0.92)
-		var w_scale := rng.randf_range(0.75, 1.20)
+		var h_scale := rng.randf_range(0.68, 1.18) if (wild_patch > 0.25) else rng.randf_range(0.38, 0.72)
+		var w_scale := rng.randf_range(0.68, 1.05)
 
 		grass_xforms.append(Transform3D(
 			Basis(Vector3.UP, rng.randf() * TAU).scaled(Vector3(w_scale, h_scale, w_scale)),
@@ -1962,18 +2046,18 @@ void vertex() {
 }
 
 void fragment() {
-	vec3 root_col = vec3(0.07, 0.14, 0.04);
-	vec3 mid_green = mix(vec3(0.16, 0.31, 0.08), vec3(0.26, 0.35, 0.10), v_patch);
-	vec3 tip_gold = mix(vec3(0.34, 0.44, 0.13), vec3(0.62, 0.53, 0.20), smoothstep(0.35, 0.85, v_patch + (v_seed - 0.5) * 0.35));
+	vec3 root_col = vec3(0.04, 0.09, 0.025);
+	vec3 mid_green = mix(vec3(0.10, 0.21, 0.055), vec3(0.16, 0.25, 0.075), v_patch);
+	vec3 tip_gold = mix(vec3(0.20, 0.30, 0.09), vec3(0.36, 0.35, 0.14), smoothstep(0.35, 0.85, v_patch + (v_seed - 0.5) * 0.35));
 
 	vec3 col = mix(root_col, mid_green, smoothstep(0.0, 0.45, v_height));
 	col = mix(col, tip_gold, smoothstep(0.48, 1.0, v_height));
 
 	ALBEDO = col;
-	ROUGHNESS = 0.62;
-	SPECULAR = 0.22;
-	AO = mix(0.35, 1.0, v_height);
-	BACKLIGHT = col * (0.45 + 0.55 * v_height);
+	ROUGHNESS = 0.58;
+	SPECULAR = 0.24;
+	AO = mix(0.28, 1.0, v_height);
+	BACKLIGHT = col * (0.35 + 0.45 * v_height);
 }
 """
 	var sm := ShaderMaterial.new()

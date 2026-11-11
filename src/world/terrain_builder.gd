@@ -100,14 +100,16 @@ static func get_footpath_distance(x: float, z: float) -> float:
 	return min_d
 
 
-## Коэффициент лесной зоны (0.0 — поле/деревня, 1.0 — густой восточный/северный лес)
+## Коэффициент лесной зоны (0.0 — поле/деревня, 1.0 — густой восточный/северный лес и рощи)
 static func get_forest_factor(x: float, z: float) -> float:
-	# Основной лесной массив начинается восточнее x = +16..+26 м, а также по дальним опушкам
-	var east_woods := smoothstep(14.0, 30.0, x + 4.5 * sin(z * 0.045))
-	var north_edge := smoothstep(66.0, 84.0, -z) * smoothstep(-28.0, 10.0, x)
-	var south_edge := smoothstep(68.0, 84.0, z) * smoothstep(-10.0, 22.0, x)
-	var outer_ring := smoothstep(78.0, 92.0, maxf(absf(x), absf(z)))
-	return clampf(maxf(maxf(east_woods, north_edge), maxf(south_edge, outer_ring)), 0.0, 1.0)
+	# Основной лесной массив начинается от поляны костра на восток (x > +6..+24 м), плюс перелески и опушки
+	var east_woods := smoothstep(6.0, 24.0, x + 5.0 * sin(z * 0.045))
+	var north_edge := smoothstep(58.0, 80.0, -z) * smoothstep(-34.0, 8.0, x)
+	var south_edge := smoothstep(60.0, 82.0, z) * smoothstep(-18.0, 20.0, x)
+	var outer_ring := smoothstep(74.0, 90.0, maxf(absf(x), absf(z)))
+	# Живописные лесные куртины и перелески вдоль околицы
+	var copse := smoothstep(0.42, 0.82, sin(x * 0.058 + 0.7) * cos(z * 0.052 - 0.4)) * smoothstep(-16.0, 12.0, x) * 0.78
+	return clampf(maxf(maxf(maxf(east_woods, north_edge), maxf(south_edge, outer_ring)), copse), 0.0, 1.0)
 
 
 ## Базовая природная высота рельефа (без учёта выравнивания под дома)
@@ -251,8 +253,8 @@ static func build_terrain_node(parent: Node3D) -> StaticBody3D:
 			tangents[t_base] = t.x
 			tangents[t_base + 1] = t.y
 			tangents[t_base + 2] = t.z
-			tangents[t_base + 3] = 1.0
-			uvs[v_idx] = Vector2(wx * 0.28, wz * 0.28)
+			tangents[t_base + 3] = -1.0
+			uvs[v_idx] = Vector2(wx * 0.50, wz * 0.50)
 			colors[v_idx] = get_surface_weights(wx, wz)
 			v_idx += 1
 
@@ -359,39 +361,56 @@ void vertex() {
 }
 
 void fragment() {
-	vec2 uv_near = v_world_pos.xz * 0.34;
-	vec2 uv_far = v_world_pos.xz * 0.085;
+	// Двухпроекционный острый сэмплинг (повёрнутый на 37° с резким переходом по высоте микрорельефа):
+	// сохраняет 100% чёткость каждой веточки и трещины (как на референсе!), полностью убирая сетку повторов!
+	vec2 uv_a = v_world_pos.xz * 0.38;
+	vec2 p_rot = vec2(
+		v_world_pos.x * 0.7986 - v_world_pos.z * 0.6018,
+		v_world_pos.x * 0.6018 + v_world_pos.z * 0.7986
+	);
+	vec2 uv_b = p_rot * 0.35 + vec2(17.3, -9.1);
+	float patch_n = vnoise(v_world_pos.xz * 0.36);
 
-	// Макро-вариация августовской травы (сочно-зелёные низины + золотистые подсохшие прогалины)
-	float macro = vnoise(v_world_pos.xz * 0.055) * 0.65 + vnoise(v_world_pos.xz * 0.14) * 0.35;
-	vec3 grass_tint = mix(vec3(0.76, 0.84, 0.56), vec3(0.98, 0.92, 0.68), smoothstep(0.30, 0.78, macro));
+	float macro = vnoise(v_world_pos.xz * 0.055) * 0.65 + vnoise(v_world_pos.xz * 0.16) * 0.35;
+	vec3 grass_tint = mix(vec3(0.42, 0.54, 0.30), vec3(0.60, 0.65, 0.40), smoothstep(0.28, 0.78, macro));
+	vec3 forest_tint = mix(vec3(0.44, 0.48, 0.34), vec3(0.62, 0.65, 0.48), smoothstep(0.20, 0.82, macro));
 
-	vec3 g_alb = mix(texture(grass_alb, uv_near).rgb, texture(grass_alb, uv_far).rgb, 0.32) * grass_tint;
-	vec3 g_nor = texture(grass_nor, uv_near).rgb;
-	vec3 g_arm = texture(grass_arm, uv_near).rgb;
+	vec3 ga1 = texture(grass_alb, uv_a).rgb;
+	vec3 ga2 = texture(grass_alb, uv_b).rgb;
+	vec3 g_arm1 = texture(grass_arm, uv_a).rgb;
+	vec3 g_arm2 = texture(grass_arm, uv_b).rgb;
+	float gw = smoothstep(0.38, 0.62, patch_n + (g_arm2.r - g_arm1.r) * 0.35);
+	vec3 g_alb = mix(ga1, ga2, gw) * grass_tint;
+	vec3 g_nor = mix(texture(grass_nor, uv_a).rgb, texture(grass_nor, uv_b).rgb, gw);
+	vec3 g_arm = mix(g_arm1, g_arm2, gw);
 
-	vec3 r_alb = mix(texture(road_alb, uv_near * 0.92).rgb, texture(road_alb, uv_far).rgb, 0.25) * vec3(1.04, 0.98, 0.90);
-	vec3 r_nor = texture(road_nor, uv_near * 0.92).rgb;
-	vec3 r_arm = texture(road_arm, uv_near * 0.92).rgb;
+	vec3 r_alb = texture(road_alb, uv_a * 0.95).rgb * mix(vec3(0.56, 0.51, 0.43), vec3(0.72, 0.67, 0.57), macro);
+	vec3 r_nor = texture(road_nor, uv_a * 0.95).rgb;
+	vec3 r_arm = texture(road_arm, uv_a * 0.95).rgb;
 
-	vec3 p_alb = texture(path_alb, uv_near * 1.05).rgb * vec3(0.96, 0.95, 0.88);
-	vec3 p_nor = texture(path_nor, uv_near * 1.05).rgb;
-	vec3 p_arm = texture(path_arm, uv_near * 1.05).rgb;
+	vec3 p_alb = texture(path_alb, uv_a * 1.12).rgb * mix(vec3(0.50, 0.51, 0.40), vec3(0.64, 0.64, 0.52), macro);
+	vec3 p_nor = texture(path_nor, uv_a * 1.12).rgb;
+	vec3 p_arm = texture(path_arm, uv_a * 1.12).rgb;
 
-	vec3 f_alb = mix(texture(forest_alb, uv_near * 0.95).rgb, texture(forest_alb, uv_far).rgb, 0.30) * vec3(0.88, 0.86, 0.78);
-	vec3 f_nor = texture(forest_nor, uv_near * 0.95).rgb;
-	vec3 f_arm = texture(forest_arm, uv_near * 0.95).rgb;
+	vec3 fa1 = texture(forest_alb, uv_a).rgb;
+	vec3 fa2 = texture(forest_alb, uv_b).rgb;
+	vec3 f_arm1 = texture(forest_arm, uv_a).rgb;
+	vec3 f_arm2 = texture(forest_arm, uv_b).rgb;
+	float fw = smoothstep(0.38, 0.62, patch_n + (f_arm2.r - f_arm1.r) * 0.40);
+	vec3 f_alb = mix(fa1, fa2, fw) * forest_tint;
+	vec3 f_nor = mix(texture(forest_nor, uv_a).rgb, texture(forest_nor, uv_b).rgb, fw);
+	vec3 f_arm = mix(f_arm1, f_arm2, fw);
 
-	// Детальное смешивание по высоте микрорельефа (Height-blended Splatmap) без размытого мыла
-	float detail_n = vnoise(v_world_pos.xz * 1.8) * 0.22;
-	float w_forest = clamp(COLOR.b + (f_arm.r - g_arm.r) * 0.30, 0.0, 1.0);
-	w_forest = smoothstep(0.18, 0.82, w_forest);
+	// Детальное смешивание по высоте микрорельефа (Height-blended Splatmap) с резкими границами мха и веточек
+	float detail_n = vnoise(v_world_pos.xz * 2.1) * 0.26;
+	float w_forest = clamp(COLOR.b * 1.15 + (f_arm.r - g_arm.r) * 0.34 + detail_n * 0.22, 0.0, 1.0);
+	w_forest = smoothstep(0.14, 0.74, COLOR.b > 0.02 ? w_forest : 0.0);
 
-	float w_path = clamp(COLOR.g + (p_arm.r - 0.5) * 0.25 + detail_n * 0.4, 0.0, 1.0);
-	w_path = smoothstep(0.22, 0.78, COLOR.g > 0.02 ? w_path : 0.0);
+	float w_path = clamp(COLOR.g + (p_arm.r - 0.5) * 0.28 + detail_n * 0.36, 0.0, 1.0);
+	w_path = smoothstep(0.22, 0.76, COLOR.g > 0.02 ? w_path : 0.0);
 
-	float w_road = clamp(COLOR.r + (r_arm.r - g_arm.r) * 0.35 + detail_n * 0.35, 0.0, 1.0);
-	w_road = smoothstep(0.20, 0.76, COLOR.r > 0.02 ? w_road : 0.0);
+	float w_road = clamp(COLOR.r + (r_arm.r - g_arm.r) * 0.35 + detail_n * 0.32, 0.0, 1.0);
+	w_road = smoothstep(0.20, 0.74, COLOR.r > 0.02 ? w_road : 0.0);
 
 	vec3 alb = mix(g_alb, f_alb, w_forest);
 	vec3 nor = mix(g_nor, f_nor, w_forest);
@@ -407,11 +426,11 @@ void fragment() {
 
 	ALBEDO = alb;
 	NORMAL_MAP = nor;
-	NORMAL_MAP_DEPTH = 1.2;
-	AO = arm.r;
-	AO_LIGHT_AFFECT = 0.75;
-	ROUGHNESS = clamp(arm.g * 1.06, 0.45, 0.98);
-	SPECULAR = 0.22;
+	NORMAL_MAP_DEPTH = 1.45;
+	AO = pow(clamp(arm.r, 0.06, 1.0), 1.25);
+	AO_LIGHT_AFFECT = 0.82;
+	ROUGHNESS = clamp(arm.g * mix(1.04, 0.90, w_forest), 0.38, 0.96);
+	SPECULAR = mix(0.22, 0.30, w_forest);
 }
 """
 

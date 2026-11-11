@@ -99,32 +99,35 @@ func _build_environment_and_lighting() -> void:
 	if hdri != null:
 		var sky_mat := PanoramaSkyMaterial.new()
 		sky_mat.panorama = hdri
-		sky_mat.energy_multiplier = 1.02
+		sky_mat.energy_multiplier = 0.85
 		sky.sky_material = sky_mat
 	else:
 		var proc_sky := ProceduralSkyMaterial.new()
-		proc_sky.sky_top_color = Color(0.24, 0.44, 0.72)
-		proc_sky.sky_horizon_color = Color(0.94, 0.74, 0.52)
-		proc_sky.ground_horizon_color = Color(0.36, 0.40, 0.26)
-		proc_sky.ground_bottom_color = Color(0.14, 0.16, 0.11)
+		proc_sky.sky_top_color = Color(0.22, 0.42, 0.70)
+		proc_sky.sky_horizon_color = Color(0.62, 0.70, 0.76)
+		proc_sky.ground_horizon_color = Color(0.22, 0.26, 0.16)
+		proc_sky.ground_bottom_color = Color(0.10, 0.13, 0.08)
 		sky.sky_material = proc_sky
 
 	sky.radiance_size = Sky.RADIANCE_SIZE_256
 	env.background_mode = Environment.BG_SKY
 	env.sky = sky
+	# Глубокий прохладный небесный полумрак в тенях леса (даёт кинематографичный контраст света и тени!)
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
-	env.ambient_light_sky_contribution = 0.82
+	env.ambient_light_color = Color(0.20, 0.32, 0.50)
+	env.ambient_light_sky_contribution = 0.34
+	env.ambient_light_energy = 0.62
 	env.reflected_light_source = Environment.REFLECTION_SOURCE_SKY
 	world_env.environment = env
 	add_child(world_env)
 
-	# Низкое тёплое солнце конца августа (длинные мягкие тени от берёз, сосен и крыш домов)
+	# Ясное послеполуденное солнце конца августа — чёткие кружевные тени крон и кустарников на лесной подстилке
 	var sun := DirectionalLight3D.new()
 	sun.name = "SunLight"
-	sun.light_color = Color(1.0, 0.88, 0.72)
-	sun.light_energy = 2.25
-	sun.light_angular_distance = 0.65
-	sun.rotation_degrees = Vector3(-24.0, -52.0, 0.0)
+	sun.light_color = Color(1.0, 0.92, 0.79)
+	sun.light_energy = 1.48
+	sun.light_angular_distance = 0.25
+	sun.rotation_degrees = Vector3(-40.0, -42.0, 0.0)
 	sun.shadow_enabled = true
 	add_child(sun)
 
@@ -133,14 +136,14 @@ func _build_environment_and_lighting() -> void:
 		probe_village.name = "VillageReflectionProbe"
 		probe_village.size = Vector3(110.0, 32.0, 180.0)
 		probe_village.position = Vector3(-25.0, 8.0, 0.0)
-		probe_village.ambient_mode = ReflectionProbe.AMBIENT_ENVIRONMENT
+		probe_village.ambient_mode = ReflectionProbe.AMBIENT_DISABLED
 		add_child(probe_village)
 
 		var probe_forest := ReflectionProbe.new()
 		probe_forest.name = "ForestReflectionProbe"
 		probe_forest.size = Vector3(105.0, 34.0, 180.0)
 		probe_forest.position = Vector3(42.0, 9.0, 0.0)
-		probe_forest.ambient_mode = ReflectionProbe.AMBIENT_ENVIRONMENT
+		probe_forest.ambient_mode = ReflectionProbe.AMBIENT_DISABLED
 		add_child(probe_forest)
 
 	GraphicsSettings.register_scene_lighting(env, sun)
