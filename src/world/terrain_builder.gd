@@ -4,8 +4,10 @@ extends RefCounted
 ## с кастомным 4-слойным PBR Splatmap-шейдером (луговая трава, просёлочная грунтовка с колеёй и кюветами,
 ## утоптанные дворовые/лесные тропинки и хвойно-лиственная лесная подстилка).
 
-const TERRAIN_EXTENT: float = 116.0 # Сетка от -116 до +116 м (232×232 м)
-const GRID_STEP: float = 1.6        # Шаг сетки ландшафта (~145×145 вершин = ~42k треугольников)
+const TERRAIN_EXTENT: float = 116.0 # Детальная игровая сетка с мелким шагом (-104..+104 м)
+const VISTA_EXTENT: float = 420.0   # Бесшовное продолжение рельефа до горизонта (840×840 м — 0 обрывов!)
+const COLLIDER_LIMIT: float = 98.0  # Физический коллайдер нужен только внутри периметра с запасом
+const GRID_STEP: float = 1.6        # Шаг детальной сетки в игровой зоне
 const PLAYABLE_LIMIT: float = 87.0  # Внутренний периметр заборов и непролазного бурелома
 
 ## Участки сельских домов и ключевых полян (выровненные площадки с плавным сопряжением рельефа)
@@ -70,14 +72,16 @@ static var _terrain_shader: Shader = null
 
 ## Центр главной просёлочной грунтовой дороги при заданном Z
 static func get_road_center_x(z: float) -> float:
-	return -23.5 + 6.8 * sin(z * 0.031) + 2.8 * cos(z * 0.058)
+	var base_x := -23.5 + 6.8 * sin(z * 0.031) + 2.8 * cos(z * 0.058)
+	# За шлагбаумами (±89 м) просёлок плавно уходит дугой в чащу дремучего леса
+	var out_bend := smoothstep(89.0, 132.0, absf(z)) * 22.0
+	return base_x + out_bend
 
 
 ## Расстояние до ближайшей точки просёлочной грунтовки
 static func get_road_distance(x: float, z: float) -> float:
 	var rx := get_road_center_x(z)
-	# Учитываем лёгкий наклон касательной дороги для точной ширины
-	var dx_dz := 6.8 * 0.031 * cos(z * 0.031) - 2.8 * 0.058 * sin(z * 0.058)
+	var dx_dz := get_road_center_x(z + 0.5) - get_road_center_x(z - 0.5)
 	var cos_norm := 1.0 / sqrt(1.0 + dx_dz * dx_dz)
 	return absf(x - rx) * cos_norm
 
@@ -100,13 +104,13 @@ static func get_footpath_distance(x: float, z: float) -> float:
 	return min_d
 
 
-## Коэффициент лесной зоны (0.0 — поле/деревня, 1.0 — густой восточный/северный лес и рощи)
+## Коэффициент лесной зоны (0.0 — поле/деревня, 1.0 — густой восточный/северный лес и все внешние границы)
 static func get_forest_factor(x: float, z: float) -> float:
-	# Основной лесной массив начинается от поляны костра на восток (x > +6..+24 м), плюс перелески и опушки
+	# Основной лесной массив начинается от поляны костра на восток (x > +6..+24 м), плюс перелески и все 4 границы карты
 	var east_woods := smoothstep(6.0, 24.0, x + 5.0 * sin(z * 0.045))
 	var north_edge := smoothstep(58.0, 80.0, -z) * smoothstep(-34.0, 8.0, x)
 	var south_edge := smoothstep(60.0, 82.0, z) * smoothstep(-18.0, 20.0, x)
-	var outer_ring := smoothstep(74.0, 90.0, maxf(absf(x), absf(z)))
+	var outer_ring := smoothstep(76.0, 88.5, maxf(absf(x), absf(z)))
 	# Живописные лесные куртины и перелески вдоль околицы
 	var copse := smoothstep(0.42, 0.82, sin(x * 0.058 + 0.7) * cos(z * 0.052 - 0.4)) * smoothstep(-16.0, 12.0, x) * 0.78
 	return clampf(maxf(maxf(maxf(east_woods, north_edge), maxf(south_edge, outer_ring)), copse), 0.0, 1.0)
@@ -121,7 +125,12 @@ static func _raw_natural_height(x: float, z: float) -> float:
 	)
 	# Восточный лес плавно приподнимается холмами (+0.6..+2.4 м) — отличный рельеф для пряток!
 	var forest_rise := smoothstep(12.0, 68.0, x) * (1.35 + 0.65 * sin(z * 0.052 + x * 0.035))
-	return 0.45 + hills + forest_rise
+	# За границами игровой зоны (±89 м) рельеф плавно поднимается лесистыми увалами (+3..+14 м) со всех 4 сторон,
+	# полностью исключая ощущение «летающего острова» и перекрывая горизонт под небом!
+	var out_d := maxf(0.0, maxf(absf(x), absf(z)) - 89.0)
+	var ridge_mod := 0.62 + 0.38 * sin(x * 0.019 + 0.7) * cos(z * 0.017 - 0.4) + 0.22 * sin((x - z) * 0.029)
+	var outer_hills := smoothstep(0.0, 165.0, out_d) * (7.2 + 6.4 * ridge_mod)
+	return 0.45 + hills + forest_rise + outer_hills
 
 
 ## Точная высота поверхности земли в любой точке (x, z) — O(1)
@@ -150,14 +159,15 @@ static func get_height(x: float, z: float) -> float:
 
 	# Профиль просёлочной грунтовки: лёгкая колея в центре и придорожные кюветы по обочинам
 	var rd := get_road_distance(x, z)
-	if rd < 7.2:
+	var road_fade := 1.0 - smoothstep(104.0, 142.0, absf(z))
+	if rd < 7.2 and road_fade > 0.01:
 		var road_center_h := _raw_natural_height(get_road_center_x(z), z)
-		var flatten := 1.0 - smoothstep(2.8, 6.8, rd)
+		var flatten := (1.0 - smoothstep(2.8, 6.8, rd)) * road_fade
 		h = lerpf(h, road_center_h, flatten * 0.78)
 		# Две автомобильные/тракторные колеи на расстоянии ±1.15 м от оси грунтовки
-		var rut := exp(-pow((rd - 1.15) / 0.48, 2.0)) * 0.08
+		var rut := exp(-pow((rd - 1.15) / 0.48, 2.0)) * 0.08 * road_fade
 		# Неглубокий травяной кювет вдоль обочин (rd ~ 4.4 м)
-		var ditch := exp(-pow((rd - 4.45) / 0.95, 2.0)) * 0.24
+		var ditch := exp(-pow((rd - 4.45) / 0.95, 2.0)) * 0.24 * road_fade
 		h -= (rut + ditch)
 
 	# Лёгкая ложбинка утоптанной лесной тропинки
@@ -183,7 +193,8 @@ static func get_surface_weights(x: float, z: float) -> Color:
 	var noise_jitter := 0.35 * sin(x * 0.43 + z * 0.37) + 0.20 * cos(x * 0.91 - z * 0.79)
 
 	var rd := get_road_distance(x, z) + noise_jitter * 0.45
-	var w_road := 1.0 - smoothstep(2.25, 3.65, rd)
+	var road_vis := 1.0 - smoothstep(104.0, 140.0, absf(z))
+	var w_road := (1.0 - smoothstep(2.25, 3.65, rd)) * road_vis
 
 	var pd := get_footpath_distance(x, z) + noise_jitter * 0.28
 	var w_path := (1.0 - smoothstep(0.85, 1.85, pd)) * (1.0 - w_road)
@@ -222,9 +233,29 @@ static func is_inside_building_footprint(x: float, z: float, margin: float = 0.8
 	return false
 
 
+static func _build_axis_coords() -> PackedFloat32Array:
+	var coords := PackedFloat32Array()
+	var outer_offsets: Array[float] = [
+		316.0, 268.0, 222.0, 180.0, 144.0, 114.0, 89.0,
+		68.0, 50.5, 36.5, 25.5, 17.0, 10.6, 5.8, 2.4,
+	]
+	var core_half := 104.0
+	for d: float in outer_offsets:
+		coords.append(-core_half - d)
+
+	var core_steps := int(round((core_half * 2.0) / GRID_STEP))
+	for i in range(core_steps + 1):
+		coords.append(-core_half + float(i) * GRID_STEP)
+
+	for idx in range(outer_offsets.size() - 1, -1, -1):
+		coords.append(core_half + float(outer_offsets[idx]))
+	return coords
+
+
 static func build_terrain_node(parent: Node3D) -> StaticBody3D:
-	var steps := int(round((TERRAIN_EXTENT * 2.0) / GRID_STEP))
-	var vert_row := steps + 1
+	var axis := _build_axis_coords()
+	var vert_row := axis.size()
+	var steps := vert_row - 1
 
 	var positions := PackedVector3Array()
 	var normals := PackedVector3Array()
@@ -232,6 +263,7 @@ static func build_terrain_node(parent: Node3D) -> StaticBody3D:
 	var uvs := PackedVector2Array()
 	var colors := PackedColorArray()
 	var indices := PackedInt32Array()
+	var col_faces := PackedVector3Array()
 
 	positions.resize(vert_row * vert_row)
 	normals.resize(vert_row * vert_row)
@@ -241,9 +273,9 @@ static func build_terrain_node(parent: Node3D) -> StaticBody3D:
 
 	var v_idx := 0
 	for iz in range(vert_row):
-		var wz := -TERRAIN_EXTENT + float(iz) * GRID_STEP
+		var wz := axis[iz]
 		for ix in range(vert_row):
-			var wx := -TERRAIN_EXTENT + float(ix) * GRID_STEP
+			var wx := axis[ix]
 			var wy := get_height(wx, wz)
 			var nrm := get_normal(wx, wz)
 			positions[v_idx] = Vector3(wx, wy, wz)
@@ -261,6 +293,7 @@ static func build_terrain_node(parent: Node3D) -> StaticBody3D:
 	indices.resize(steps * steps * 6)
 	var i_ptr := 0
 	for iz in range(steps):
+		var z_in := absf(axis[iz]) <= COLLIDER_LIMIT and absf(axis[iz + 1]) <= COLLIDER_LIMIT
 		for ix in range(steps):
 			var i00 := iz * vert_row + ix
 			var i10 := i00 + 1
@@ -276,6 +309,14 @@ static func build_terrain_node(parent: Node3D) -> StaticBody3D:
 			indices[i_ptr + 4] = i11
 			indices[i_ptr + 5] = i01
 			i_ptr += 6
+
+			if z_in and absf(axis[ix]) <= COLLIDER_LIMIT and absf(axis[ix + 1]) <= COLLIDER_LIMIT:
+				col_faces.append(positions[i00])
+				col_faces.append(positions[i10])
+				col_faces.append(positions[i11])
+				col_faces.append(positions[i00])
+				col_faces.append(positions[i11])
+				col_faces.append(positions[i01])
 
 	var arrays := []
 	arrays.resize(Mesh.ARRAY_MAX)
@@ -302,7 +343,9 @@ static func build_terrain_node(parent: Node3D) -> StaticBody3D:
 
 	var col := CollisionShape3D.new()
 	col.name = "TerrainCollider"
-	col.shape = arr_mesh.create_trimesh_shape()
+	var tri_shape := ConcavePolygonShape3D.new()
+	tri_shape.set_faces(col_faces)
+	col.shape = tri_shape
 	sb.add_child(col)
 
 	parent.add_child(sb)

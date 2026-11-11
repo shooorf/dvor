@@ -753,8 +753,8 @@ static func _build_airtight_outer_perimeter(parent: Node3D, rng: RandomNumberGen
 					perim_log_xf.append(Transform3D(Basis(Vector3.UP, rng.randf_range(-0.15, 0.15)).scaled(Vector3(2.4, 2.2, 2.2)), Vector3(wx, wy + 0.05, wz + (0.6 if wz > 0 else -0.6))))
 				continue
 
-			# На западной стороне и у крайних участков деревни ставим глухой 2.35-метровый забор + заросли
-			if wx < -8.0 and ff < 0.72 and (i % 2 == 0):
+			# На западной стороне и у крайних участков деревни ставим глухой 2.55-метровый забор, а сразу за ним поднимается дремучий лес
+			if wx < -8.0 and absf(wz) < 76.0 and (i % 2 == 0):
 				var fmat := mat_fence_wood if ((i / 2) % 2 == 0) else mat_fence_slate
 				var f_sz := Vector3(4.55, 2.55, 0.14) if is_ns else Vector3(0.14, 2.55, 4.55)
 				_add_box_part(sb, f_sz, Vector3(wx, wy + 1.05, wz), Vector3.ZERO, fmat, false)
@@ -768,6 +768,13 @@ static func _build_airtight_outer_perimeter(parent: Node3D, rng: RandomNumberGen
 			perim_shrub_xf.append(Transform3D(
 				Basis(Vector3.UP, rng.randf() * TAU).scaled(Vector3(sc2, sc2 * 1.35, sc2)),
 				Vector3(wx + out_dir.x * 1.65, wy - 0.05, wz + out_dir.y * 1.65)
+			))
+			var p3 := Vector2(wx, wz) + out_dir * 3.55
+			var wy3 := TerrainBuilder.get_height(p3.x, p3.y)
+			var sc3 := rng.randf_range(1.95, 2.75)
+			perim_shrub_xf.append(Transform3D(
+				Basis(Vector3.UP, rng.randf() * TAU).scaled(Vector3(sc3, sc3 * 1.4, sc3)),
+				Vector3(p3.x, wy3 - 0.06, p3.y)
 			))
 
 			if i % 3 == 0:

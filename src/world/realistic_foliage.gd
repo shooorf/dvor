@@ -121,14 +121,19 @@ static func _build_trees_and_trunks(parent: Node3D, rng: RandomNumberGenerator) 
 	var species_variants: Dictionary = {}
 	if DisplayServer.get_name() != "headless":
 		for sp: int in all_species:
-			var v0 := _generate_tree_mesh(sp, 100 + sp * 17)
-			var v1 := _generate_tree_mesh(sp, 200 + sp * 31)
-			species_variants[sp] = [v0, v1]
+			var v_cnt := _get_species_variant_count(sp)
+			var arr: Array[ArrayMesh] = []
+			for v_idx in range(v_cnt):
+				arr.append(_generate_tree_mesh(sp, 100 + sp * 37 + v_idx * 113))
+			species_variants[sp] = arr
 
 	var transforms_by_key: Dictionary = {}
+	var vista_transforms_by_key: Dictionary = {}
 	for sp: int in all_species:
-		transforms_by_key["%d_0" % sp] = []
-		transforms_by_key["%d_1" % sp] = []
+		for v_idx in range(_get_species_variant_count(sp)):
+			var k_str := "%d_%d" % [sp, v_idx]
+			transforms_by_key[k_str] = []
+			vista_transforms_by_key[k_str] = []
 
 	var placed_trees: Array[Vector2] = []
 
@@ -218,28 +223,9 @@ static func _build_trees_and_trunks(parent: Node3D, rng: RandomNumberGenerator) 
 		var sc3 := rng.randf_range(0.90, 1.44)
 		_register_tree_instance(Vector2(tx, tz), sp3, sc3, rng, placed_trees, transforms_by_key, trunk_bodies)
 
-	# Г) Плотная лесная стена за внешним периметром карты (от ±88 до ±106 м)
-	var border_pool: Array[int] = [
-		TreeSpecies.PINE, TreeSpecies.SPRUCE, TreeSpecies.OAK,
-		TreeSpecies.BIRCH, TreeSpecies.ASPEN, TreeSpecies.MAPLE,
-	]
-	for i in range(195):
-		var side_idx := i % 4
-		var along := rng.randf_range(-102.0, 102.0)
-		var depth := rng.randf_range(88.5, 106.0)
-		var bp := Vector2.ZERO
-		match side_idx:
-			0: bp = Vector2(along, -depth)
-			1: bp = Vector2(along, depth)
-			2: bp = Vector2(-depth, along)
-			_: bp = Vector2(depth, along)
-		var sp_b: int = border_pool[i % border_pool.size()]
-		var sc_b := rng.randf_range(1.06, 1.55)
-		var v_idx := i % 2
-		var key := "%d_%d" % [sp_b, v_idx]
-		var y_b := TerrainBuilder.get_height(bp.x, bp.y) - 0.12
-		var xf := Transform3D(Basis(Vector3.UP, rng.randf() * TAU).scaled(Vector3(sc_b, sc_b, sc_b)), Vector3(bp.x, y_b, bp.y))
-		(transforms_by_key[key] as Array).append(xf)
+	# Г) Дремучий многоярусный лес со всех 4 сторон карты и по углам (от ±87.8 до ±315 м по лесистым холмам)
+	if DisplayServer.get_name() != "headless":
+		_populate_primeval_border_forest(transforms_by_key, vista_transforms_by_key)
 
 	# Д) Поваленные лесные стволы, пни и сухостой Poly Haven + коллайдеры
 	_populate_fallen_logs_and_stumps(parent, trunk_bodies, rng)
@@ -251,22 +237,146 @@ static func _build_trees_and_trunks(parent: Node3D, rng: RandomNumberGenerator) 
 	trees_group.name = "ForestTreeChunks"
 	parent.add_child(trees_group)
 
+	var vista_group := Node3D.new()
+	vista_group.name = "OuterPrimevalForestVista"
+	parent.add_child(vista_group)
+
 	for sp: int in all_species:
-		for v_idx in range(2):
+		var v_cnt := _get_species_variant_count(sp)
+		for v_idx in range(v_cnt):
 			var key := "%d_%d" % [sp, v_idx]
 			var xforms: Array = transforms_by_key[key]
-			if xforms.is_empty():
-				continue
-			_add_multimesh_batch(
-				trees_group,
-				"Trees_Sp%d_V%d" % [sp, v_idx],
-				species_variants[sp][v_idx],
-				xforms,
-				245.0,
-				true,
-				50.0
-			)
+			if not xforms.is_empty():
+				_add_multimesh_batch(
+					trees_group,
+					"Trees_Sp%d_V%d" % [sp, v_idx],
+					species_variants[sp][v_idx],
+					xforms,
+					260.0,
+					true,
+					50.0
+				)
+			var vista_xf: Array = vista_transforms_by_key[key]
+			if not vista_xf.is_empty():
+				_add_multimesh_batch(
+					vista_group,
+					"VistaTrees_Sp%d_V%d" % [sp, v_idx],
+					species_variants[sp][v_idx],
+					vista_xf,
+					390.0,
+					false,
+					72.0
+				)
 	return placed_trees
+
+
+static func _get_species_variant_count(species: int) -> int:
+	if species == TreeSpecies.SPRUCE:
+		return 5
+	return 3
+
+
+static func _pick_primeval_border_species(rng: RandomNumberGenerator, spruce_weight: float = 0.45) -> int:
+	var r := rng.randf()
+	if r < spruce_weight:
+		return TreeSpecies.SPRUCE
+	elif r < spruce_weight + 0.25:
+		return TreeSpecies.PINE
+	elif r < spruce_weight + 0.36:
+		return TreeSpecies.OAK
+	elif r < spruce_weight + 0.45:
+		return TreeSpecies.BIRCH
+	elif r < spruce_weight + 0.50:
+		return TreeSpecies.ASPEN
+	return TreeSpecies.MAPLE
+
+
+## Окружает всю игровую зону со всех 4 сторон и углов сплошным дремучим лесом до самого горизонта (88..315 м)
+static func _populate_primeval_border_forest(
+	near_transforms: Dictionary,
+	vista_transforms: Dictionary
+) -> void:
+	var brng := RandomNumberGenerator.new()
+	brng.seed = 20260911
+
+	# Пояс 1 (87.8..108 м): плотная стена опушки без единого просвета (нижний еловый полог + вековые великаны)
+	var gx := -107.2
+	while gx <= 107.2:
+		var gz := -107.2
+		while gz <= 107.2:
+			if maxf(absf(gx), absf(gz)) >= 87.2:
+				var px := gx + brng.randf_range(-1.45, 1.45)
+				var pz := gz + brng.randf_range(-1.45, 1.45)
+				var edge_d := maxf(absf(px), absf(pz))
+				if edge_d >= 87.8 and brng.randf() < 0.84:
+					# Оставляем короткий видимый изгиб грунтовки за шлагбаумом (до 103 м), а дальше смыкаем чащу!
+					if not (absf(pz) < 103.5 and TerrainBuilder.get_road_distance(px, pz) < 4.4):
+						var is_low_skirt := (edge_d < 96.5 and brng.randf() < 0.56)
+						var sp1: int
+						var sc1: float
+						var y_sink := 0.14
+						if is_low_skirt:
+							# Приземистые густые ели и подлесок закрывают нижний ярус (0..6 м) за заборами и на опушках
+							sp1 = TreeSpecies.SPRUCE if brng.randf() < 0.76 else (TreeSpecies.MAPLE if brng.randf() < 0.5 else TreeSpecies.BIRCH)
+							sc1 = brng.randf_range(0.62, 1.05)
+							y_sink = 0.34
+						else:
+							sp1 = _pick_primeval_border_species(brng, 0.44)
+							sc1 = brng.randf_range(1.12, 1.68)
+						var v_idx1 := brng.randi() % _get_species_variant_count(sp1)
+						var wy1 := TerrainBuilder.get_height(px, pz) - y_sink
+						var w_sc1 := sc1 * brng.randf_range(0.86, 1.15)
+						var h_sc1 := sc1 * brng.randf_range(0.88, 1.16)
+						var tilt1 := Vector3(brng.randf_range(-0.04, 0.04), 0.0, brng.randf_range(-0.04, 0.04))
+						var b1 := (Basis.from_euler(tilt1) * Basis(Vector3.UP, brng.randf() * TAU)).scaled(Vector3(w_sc1, h_sc1, w_sc1))
+						var xf1 := Transform3D(b1, Vector3(px, wy1, pz))
+						var key1 := "%d_%d" % [sp1, v_idx1]
+						if edge_d < 100.5:
+							(near_transforms[key1] as Array).append(xf1)
+						else:
+							(vista_transforms[key1] as Array).append(xf1)
+			gz += 3.45
+		gx += 3.45
+
+	# Пояс 2 (108..184 м): глубокая чаща на поднимающихся лесистых склонах
+	var mx := -182.0
+	while mx <= 182.0:
+		var mz := -182.0
+		while mz <= 182.0:
+			if maxf(absf(mx), absf(mz)) >= 107.5:
+				if brng.randf() < 0.82:
+					var px2 := mx + brng.randf_range(-3.1, 3.1)
+					var pz2 := mz + brng.randf_range(-3.1, 3.1)
+					var sp2 := _pick_primeval_border_species(brng, 0.48)
+					var sc2 := brng.randf_range(1.25, 1.92)
+					var v_idx2 := brng.randi() % _get_species_variant_count(sp2)
+					var wy2 := TerrainBuilder.get_height(px2, pz2) - 0.22
+					var w_sc2 := sc2 * brng.randf_range(0.86, 1.16)
+					var h_sc2 := sc2 * brng.randf_range(0.90, 1.18)
+					var b2 := Basis(Vector3.UP, brng.randf() * TAU).scaled(Vector3(w_sc2, h_sc2, w_sc2))
+					(vista_transforms["%d_%d" % [sp2, v_idx2]] as Array).append(Transform3D(b2, Vector3(px2, wy2, pz2)))
+			mz += 7.2
+		mx += 7.2
+
+	# Пояс 3 (184..315 м): дальние лесистые увалы до самого горизонта во всех направлениях
+	var fx := -312.0
+	while fx <= 312.0:
+		var fz := -312.0
+		while fz <= 312.0:
+			if maxf(absf(fx), absf(fz)) >= 182.0:
+				if brng.randf() < 0.78:
+					var px3 := fx + brng.randf_range(-6.2, 6.2)
+					var pz3 := fz + brng.randf_range(-6.2, 6.2)
+					var sp3 := _pick_primeval_border_species(brng, 0.52)
+					var sc3 := brng.randf_range(1.55, 2.38)
+					var v_idx3 := brng.randi() % _get_species_variant_count(sp3)
+					var wy3 := TerrainBuilder.get_height(px3, pz3) - 0.30
+					var w_sc3 := sc3 * brng.randf_range(0.88, 1.18)
+					var h_sc3 := sc3 * brng.randf_range(0.92, 1.18)
+					var b3 := Basis(Vector3.UP, brng.randf() * TAU).scaled(Vector3(w_sc3, h_sc3, w_sc3))
+					(vista_transforms["%d_%d" % [sp3, v_idx3]] as Array).append(Transform3D(b3, Vector3(px3, wy3, pz3)))
+			fz += 14.5
+		fx += 14.5
 
 
 static func _can_place_tree_at(x: float, z: float, existing: Array[Vector2], min_dist: float) -> bool:
@@ -300,11 +410,13 @@ static func _register_tree_instance(
 	placed_trees.append(pos2)
 	var wy := TerrainBuilder.get_height(pos2.x, pos2.y) - 0.08
 	var yaw := rng.randf() * TAU
-	var tilt := Vector3(rng.randf_range(-0.03, 0.03), 0.0, rng.randf_range(-0.03, 0.03))
-	var basis := (Basis.from_euler(tilt) * Basis(Vector3.UP, yaw)).scaled(Vector3(scale_val, scale_val, scale_val))
+	var tilt := Vector3(rng.randf_range(-0.035, 0.035), 0.0, rng.randf_range(-0.035, 0.035))
+	var w_sc := scale_val * rng.randf_range(0.87, 1.13)
+	var h_sc := scale_val * rng.randf_range(0.90, 1.14)
+	var basis := (Basis.from_euler(tilt) * Basis(Vector3.UP, yaw)).scaled(Vector3(w_sc, h_sc, w_sc))
 	var xf := Transform3D(basis, Vector3(pos2.x, wy, pos2.y))
 
-	var v_idx := rng.randi() % 2
+	var v_idx := rng.randi() % _get_species_variant_count(species)
 	(transforms_by_key["%d_%d" % [species, v_idx]] as Array).append(xf)
 
 	var col := CollisionShape3D.new()
@@ -520,42 +632,113 @@ static func _generate_tree_mesh(species: int, seed_val: int) -> ArrayMesh:
 			_append_spray_rosette(st_leaf, spine2[spine2.size() - 1] + Vector3(0.0, 0.15, 0.0), pine_dome, 1.92, false, 8, rng)
 
 		TreeSpecies.SPRUCE:
-			var h3 := rng.randf_range(12.6, 16.4)
-			var lean3 := Vector2(rng.randf_range(-0.15, 0.15), rng.randf_range(-0.15, 0.15))
-			var spine3 := _make_curved_spine(Vector3.ZERO, Vector3(lean3.x, h3, lean3.y), 10, 0.08, rng)
-			_append_tube_along_spine(st_wood, spine3, 0.28, 0.025, 10, true)
+			var h3 := rng.randf_range(12.2, 17.4)
+			var lean3 := Vector2(rng.randf_range(-0.28, 0.28), rng.randf_range(-0.28, 0.28))
+			var spine3 := _make_curved_spine(Vector3.ZERO, Vector3(lean3.x, h3, lean3.y), 11, 0.16, rng)
+			_append_tube_along_spine(st_wood, spine3, rng.randf_range(0.25, 0.33), 0.024, 10, true)
 
-			# 26 густых конических ярусов настоящих фотосканированных еловых лап
-			var tiers := 26
-			for tier in range(tiers):
-				var t3 := lerpf(0.06, 0.968, float(tier) / float(tiers - 1))
-				var origin3 := _sample_spine(spine3, t3)
-				var branches_in_tier := 8 if t3 < 0.36 else (7 if t3 < 0.72 else 5)
-				var b_len3 := lerpf(3.35, 0.44, pow(t3, 0.85)) * rng.randf_range(0.90, 1.12)
-				var tier_dome := origin3 - Vector3(0.0, 1.5 + (1.0 - t3) * 1.2, 0.0)
+			# Индивидуальный характер конкретной ели: высота живой юбки, ширина, конусность,
+			# степень поникания старых лап и естественная световая асимметрия кроны
+			var crown_start_t := rng.randf_range(0.045, 0.145)
+			var base_span := rng.randf_range(2.85, 3.88)
+			var taper_exp := rng.randf_range(0.74, 1.08)
+			var droop_factor := rng.randf_range(0.68, 1.38)
+			var sun_yaw := rng.randf() * TAU
+			var asym_amt := rng.randf_range(0.08, 0.22)
+			var wave_phase := rng.randf() * TAU
+			var wave_freq := rng.randf_range(9.0, 15.5)
+
+			# Короткие сухие нижние сучья в тени под живыми ярусами (как у настоящих лесных елей)
+			if crown_start_t > 0.08:
+				for _d_idx in range(rng.randi_range(3, 6)):
+					var td := rng.randf_range(0.035, crown_start_t - 0.01)
+					var od := _sample_spine(spine3, td)
+					var dyaw := rng.randf() * TAU
+					var dlen := rng.randf_range(0.45, 1.05)
+					var dend := od + Vector3(cos(dyaw) * dlen, -dlen * rng.randf_range(0.18, 0.36), sin(dyaw) * dlen)
+					_append_tube_along_spine(st_wood, [od, od.lerp(dend, 0.5) + Vector3(0.0, -0.04, 0.0), dend], 0.032, 0.007, 4, false)
+
+			# Нерегулярные годовые мутовки: живой разброс расстояния между ярусами, случайный поворот,
+			# естественные просветы кроны и вертикальное смещение ветвей внутри яруса (0 спирального паттерна!)
+			var t3 := crown_start_t
+			var prev_tier_yaw := rng.randf() * TAU
+			while t3 < 0.968:
+				var height_norm := clampf((t3 - crown_start_t) / (0.968 - crown_start_t), 0.0, 1.0)
+				var branches_in_tier: int
+				if height_norm < 0.35:
+					branches_in_tier = rng.randi_range(5, 8)
+				elif height_norm < 0.72:
+					branches_in_tier = rng.randi_range(4, 7)
+				else:
+					branches_in_tier = rng.randi_range(3, 5)
+
+				var tier_yaw := prev_tier_yaw + rng.randf_range(0.85, 5.45)
+				prev_tier_yaw = tier_yaw
+				var skip_slot := (rng.randi() % branches_in_tier) if (branches_in_tier >= 5 and rng.randf() < 0.32) else -1
+				var tier_scale_jitter := rng.randf_range(0.80, 1.20) * (1.0 + 0.14 * sin(t3 * wave_freq + wave_phase))
 
 				for k in range(branches_in_tier):
-					var yaw3 := float(tier) * 0.68 + float(k) * (TAU / float(branches_in_tier)) + rng.randf_range(-0.13, 0.13)
+					if k == skip_slot:
+						continue
+					var tb := clampf(t3 + rng.randf_range(-0.018, 0.018), 0.03, 0.978)
+					var origin3 := _sample_spine(spine3, tb)
+					var tier_dome := origin3 - Vector3(0.0, 1.45 + (1.0 - tb) * 1.25, 0.0)
+
+					var slot_step := TAU / float(branches_in_tier)
+					var yaw3 := tier_yaw + float(k) * slot_step + rng.randf_range(-0.38, 0.38) * slot_step * 1.35
+					var sun_bonus := 1.0 + asym_amt * cos(yaw3 - sun_yaw)
+					var profile_len := lerpf(base_span, 0.40, pow(height_norm, taper_exp))
+					var b_len3 := profile_len * tier_scale_jitter * sun_bonus * rng.randf_range(0.72, 1.28)
+
 					var dir_xz := Vector3(cos(yaw3), 0.0, sin(yaw3))
-					var droop_y := -0.46 * (1.0 - t3 * 0.76) + 0.06
-					var wood_mid := origin3 + dir_xz * (b_len3 * 0.38) + Vector3(0.0, droop_y * 0.55, 0.0)
-					var wood_end := origin3 + dir_xz * (b_len3 * 0.72) + Vector3(0.0, droop_y * 0.88, 0.0)
-					_append_tube_along_spine(st_wood, [origin3, wood_mid, wood_end], 0.048 * (1.12 - t3 * 0.65), 0.009, 5, false)
+					var droop_y := (-0.48 * droop_factor * (1.0 - tb * 0.74) + rng.randf_range(-0.12, 0.14)) * rng.randf_range(0.70, 1.35)
+					var tip_up := rng.randf_range(0.03, 0.22) * (1.0 - tb * 0.45)
+					var side_sway := Vector3(-dir_xz.z, 0.0, dir_xz.x) * (b_len3 * rng.randf_range(-0.11, 0.11))
+
+					var wood_mid := origin3 + dir_xz * (b_len3 * 0.38) + side_sway * 0.5 + Vector3(0.0, droop_y * 0.58, 0.0)
+					var wood_end := origin3 + dir_xz * (b_len3 * 0.72) + side_sway + Vector3(0.0, droop_y * 0.90, 0.0)
+					_append_tube_along_spine(st_wood, [origin3, wood_mid, wood_end], 0.048 * (1.12 - tb * 0.65), 0.009, 5, false)
 
 					var full_spine: Array[Vector3] = [
 						origin3,
-						origin3 + dir_xz * (b_len3 * 0.52) + Vector3(0.0, droop_y * 0.78, 0.0),
-						origin3 + dir_xz * b_len3 + Vector3(0.0, droop_y + 0.10 * (1.0 - t3 * 0.5), 0.0),
+						origin3 + dir_xz * (b_len3 * 0.52) + side_sway * 0.65 + Vector3(0.0, droop_y * 0.80, 0.0),
+						origin3 + dir_xz * b_len3 + side_sway + Vector3(0.0, droop_y + tip_up, 0.0),
 					]
-					_append_spruce_branch_boughs(st_leaf, full_spine, yaw3, b_len3, t3, tier_dome, rng)
+					_append_spruce_branch_boughs(st_leaf, full_spine, yaw3, b_len3, tb, tier_dome, rng)
+
+				# Неравномерный шаг до следующего яруса (чередование густых мутовок и естественных световых окон!)
+				var avg_step := lerpf(0.033, 0.041, height_norm)
+				var step_mult := rng.randf_range(0.45, 1.68)
+				if rng.randf() < 0.20 and height_norm > 0.10 and height_norm < 0.86:
+					step_mult *= rng.randf_range(1.28, 1.68)
+				t3 += avg_step * step_mult
+
+			# Межмутовчатые внеочередные побеги между ярусами сбивают любую горизонтальную полосатость
+			for _ib in range(rng.randi_range(10, 16)):
+				var tib := rng.randf_range(crown_start_t + 0.025, 0.93)
+				var hn_ib := clampf((tib - crown_start_t) / (0.968 - crown_start_t), 0.0, 1.0)
+				var orig_ib := _sample_spine(spine3, tib)
+				var yaw_ib := rng.randf() * TAU
+				var len_ib := lerpf(base_span, 0.42, pow(hn_ib, taper_exp)) * rng.randf_range(0.50, 0.90)
+				var dxz_ib := Vector3(cos(yaw_ib), 0.0, sin(yaw_ib))
+				var drp_ib := -0.38 * droop_factor * (1.0 - tib * 0.72) + rng.randf_range(-0.09, 0.11)
+				var dome_ib := orig_ib - Vector3(0.0, 1.4 + (1.0 - tib) * 1.1, 0.0)
+				var sp_ib: Array[Vector3] = [
+					orig_ib,
+					orig_ib + dxz_ib * (len_ib * 0.52) + Vector3(0.0, drp_ib * 0.76, 0.0),
+					orig_ib + dxz_ib * len_ib + Vector3(0.0, drp_ib + 0.08, 0.0),
+				]
+				_append_spruce_branch_boughs(st_leaf, sp_ib, yaw_ib, len_ib, tib, dome_ib, rng)
 
 			var top_pt := spine3[spine3.size() - 1]
 			var top_dome := top_pt - Vector3(0.0, 1.2, 0.0)
+			var top_base_yaw := rng.randf() * TAU
 			for s_idx in range(4):
-				var syaw := float(s_idx) * (TAU / 4.0) + rng.randf_range(-0.18, 0.18)
-				var sb := Basis(Vector3.UP, syaw) * Basis(Vector3.RIGHT, deg_to_rad(-56.0))
+				var syaw := top_base_yaw + float(s_idx) * (TAU / 4.0) + rng.randf_range(-0.34, 0.34)
+				var sb := Basis(Vector3.UP, syaw) * Basis(Vector3.RIGHT, deg_to_rad(rng.randf_range(-64.0, -46.0)))
 				var poly_top: Array = FIR_BOUGH_POLYS[2 + (s_idx % 2)]
-				_append_curved_bough_card(st_leaf, top_pt - Vector3(0.0, 0.22, 0.0), sb, 0.58, 0.84, -0.05, 0.34, 0.75, poly_top, top_dome, rng.randf(), 0.98)
+				var top_h := rng.randf_range(0.72, 1.02)
+				_append_curved_bough_card(st_leaf, top_pt - Vector3(0.0, rng.randf_range(0.14, 0.30), 0.0), sb, top_h * 0.68, top_h, -0.05, 0.34, 0.75, poly_top, top_dome, rng.randf(), 0.98)
 
 		TreeSpecies.OAK:
 			# Дуб черешчатый (Quercus robur): могучий кряжистый ствол, толстые суковатые ветви и широкий шатёр кроны
@@ -704,7 +887,7 @@ static func _generate_tree_mesh(species: int, seed_val: int) -> ArrayMesh:
 	return mesh
 
 
-## Раскладывает веер настоящих фотосканированных еловых лап СТРОГО вдоль направления ветви ели
+## Раскладывает живой асимметричный веер фотосканированных еловых лап вдоль ветви ели
 static func _append_spruce_branch_boughs(
 	st: SurfaceTool,
 	b_spine: Array[Vector3],
@@ -715,38 +898,41 @@ static func _append_spruce_branch_boughs(
 	rng: RandomNumberGenerator
 ) -> void:
 	var align_yaw := PI * 0.5 - branch_yaw
-	var size_scale := clampf(b_len * 0.54 + 0.44, 0.56, 1.74)
+	var size_scale := clampf(b_len * 0.54 + 0.44, 0.52, 1.82)
 
-	if height_t < 0.78:
-		var p_inner := _sample_spine(b_spine, 0.20)
+	if height_t < 0.80:
 		for side: float in [-1.0, 1.0]:
-			var byaw: float = align_yaw + side * rng.randf_range(0.46, 0.64)
-			var bpitch := deg_to_rad(rng.randf_range(12.0, 24.0))
-			var broll: float = side * deg_to_rad(rng.randf_range(8.0, 16.0))
+			if rng.randf() < 0.12:
+				continue
+			var p_inner := _sample_spine(b_spine, rng.randf_range(0.15, 0.27))
+			var byaw: float = align_yaw + side * rng.randf_range(0.40, 0.72)
+			var bpitch := deg_to_rad(rng.randf_range(9.0, 27.0))
+			var broll: float = side * deg_to_rad(rng.randf_range(6.0, 20.0)) + rng.randf_range(-0.08, 0.08)
 			var basis := Basis(Vector3.UP, byaw) * Basis(Vector3.RIGHT, bpitch) * Basis(Vector3.FORWARD, broll)
 			var poly: Array = FIR_BOUGH_POLYS[rng.randi() % 4]
-			var l := size_scale * rng.randf_range(0.84, 1.04)
-			_append_curved_bough_card(st, p_inner, basis, l * 0.94, l, -0.13 * l, 0.34, 0.84, poly, dome_origin, rng.randf(), 0.66)
+			var l := size_scale * rng.randf_range(0.76, 1.12)
+			_append_curved_bough_card(st, p_inner, basis, l * 0.94, l, -rng.randf_range(0.10, 0.18) * l, 0.34, 0.84, poly, dome_origin, rng.randf(), 0.66)
 
-	var p_mid := _sample_spine(b_spine, 0.46)
 	for side2: float in [-1.0, 1.0]:
-		var myaw: float = align_yaw + side2 * rng.randf_range(0.32, 0.48)
-		var mpitch := deg_to_rad(rng.randf_range(10.0, 20.0))
-		var mroll: float = side2 * deg_to_rad(rng.randf_range(7.0, 14.0))
+		var p_mid := _sample_spine(b_spine, rng.randf_range(0.40, 0.55))
+		var myaw: float = align_yaw + side2 * rng.randf_range(0.26, 0.54)
+		var mpitch := deg_to_rad(rng.randf_range(7.0, 24.0))
+		var mroll: float = side2 * deg_to_rad(rng.randf_range(5.0, 17.0)) + rng.randf_range(-0.07, 0.07)
 		var mbasis := Basis(Vector3.UP, myaw) * Basis(Vector3.RIGHT, mpitch) * Basis(Vector3.FORWARD, mroll)
-		var mpoly: Array = FIR_BOUGH_POLYS[rng.randi() % 2]
-		var ml := size_scale * rng.randf_range(0.90, 1.10)
-		_append_curved_bough_card(st, p_mid, mbasis, ml * 0.96, ml, -0.14 * ml, 0.34, 0.84, mpoly, dome_origin, rng.randf(), 0.82)
+		var mpoly: Array = FIR_BOUGH_POLYS[rng.randi() % 4]
+		var ml := size_scale * rng.randf_range(0.82, 1.16)
+		_append_curved_bough_card(st, p_mid, mbasis, ml * 0.96, ml, -rng.randf_range(0.10, 0.18) * ml, 0.34, 0.84, mpoly, dome_origin, rng.randf(), 0.82)
 
 	if height_t < 0.88:
-		var cbasis := Basis(Vector3.UP, align_yaw + rng.randf_range(-0.08, 0.08)) * Basis(Vector3.RIGHT, deg_to_rad(8.0))
-		var cl := size_scale * rng.randf_range(0.84, 1.02)
-		_append_curved_bough_card(st, p_mid + Vector3(0.0, 0.04, 0.0), cbasis, cl * 0.92, cl, -0.10 * cl, 0.34, 0.84, FIR_BOUGH_POLYS[rng.randi() % 2], dome_origin, rng.randf(), 0.90)
+		var p_center := _sample_spine(b_spine, rng.randf_range(0.42, 0.54))
+		var cbasis := Basis(Vector3.UP, align_yaw + rng.randf_range(-0.16, 0.16)) * Basis(Vector3.RIGHT, deg_to_rad(rng.randf_range(2.0, 16.0))) * Basis(Vector3.FORWARD, rng.randf_range(-0.12, 0.12))
+		var cl := size_scale * rng.randf_range(0.78, 1.08)
+		_append_curved_bough_card(st, p_center + Vector3(0.0, rng.randf_range(0.02, 0.07), 0.0), cbasis, cl * 0.92, cl, -0.10 * cl, 0.34, 0.84, FIR_BOUGH_POLYS[rng.randi() % 3], dome_origin, rng.randf(), 0.90)
 
-	var p_tip := _sample_spine(b_spine, 0.68)
-	var tbasis := Basis(Vector3.UP, align_yaw + rng.randf_range(-0.06, 0.06)) * Basis(Vector3.RIGHT, deg_to_rad(rng.randf_range(2.0, 12.0)))
-	var tl := size_scale * rng.randf_range(0.92, 1.12)
-	_append_curved_bough_card(st, p_tip, tbasis, tl * 0.96, tl, -0.10 * tl, 0.32, 0.86, FIR_BOUGH_POLYS[rng.randi() % 2], dome_origin, rng.randf(), 0.98)
+	var p_tip := _sample_spine(b_spine, rng.randf_range(0.64, 0.74))
+	var tbasis := Basis(Vector3.UP, align_yaw + rng.randf_range(-0.14, 0.14)) * Basis(Vector3.RIGHT, deg_to_rad(rng.randf_range(-2.0, 15.0))) * Basis(Vector3.FORWARD, rng.randf_range(-0.10, 0.10))
+	var tl := size_scale * rng.randf_range(0.86, 1.16)
+	_append_curved_bough_card(st, p_tip, tbasis, tl * 0.96, tl, -rng.randf_range(0.07, 0.14) * tl, 0.32, 0.86, FIR_BOUGH_POLYS[rng.randi() % 2], dome_origin, rng.randf(), 0.98)
 
 
 ## Объёмная 3D-розетка из 7–8 многолистных фотосканированных ветвей

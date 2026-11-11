@@ -91,11 +91,11 @@ func apply_preset(preset: int) -> void:
 		_registered_env.volumetric_fog_enabled = false
 		_registered_env.fog_enabled = (preset != Preset.MEDIUM)
 		_registered_env.fog_mode = Environment.FOG_MODE_DEPTH
-		_registered_env.fog_depth_begin = 52.0
-		_registered_env.fog_depth_end = 195.0
-		_registered_env.fog_light_color = Color(0.62, 0.72, 0.82)
-		_registered_env.fog_density = 1.0
-		_registered_env.fog_sky_affect = 0.18
+		_registered_env.fog_depth_begin = 76.0
+		_registered_env.fog_depth_end = 365.0
+		_registered_env.fog_light_color = Color(0.50, 0.60, 0.68)
+		_registered_env.fog_density = 0.72
+		_registered_env.fog_sky_affect = 0.16
 
 		match preset:
 			Preset.ULTRA_4070:
