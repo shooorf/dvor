@@ -19,7 +19,7 @@ var _registered_sun: DirectionalLight3D = null
 func get_preset_name(p: int) -> String:
 	match p:
 		Preset.ULTRA_4070:
-			return "Ultra (RTX 4070 — SDFGI + 4K + Volumetric)"
+			return "Ultra (RTX 4070 — 4K PBR + SSIL + Volumetric)"
 		Preset.HIGH:
 			return "Высокие (SSAO + SSR + Дымка)"
 		Preset.MEDIUM:
@@ -43,13 +43,13 @@ func apply_preset(preset: int) -> void:
 	if vp != null:
 		match preset:
 			Preset.ULTRA_4070:
-				vp.msaa_3d = Viewport.MSAA_2X
+				vp.msaa_3d = Viewport.MSAA_DISABLED
 				vp.use_taa = true
 				vp.screen_space_aa = Viewport.SCREEN_SPACE_AA_DISABLED
-				vp.positional_shadow_atlas_size = 8192
-				RenderingServer.directional_shadow_atlas_set_size(8192, true)
+				vp.positional_shadow_atlas_size = 4096
+				RenderingServer.directional_shadow_atlas_set_size(4096, true)
 			Preset.HIGH:
-				vp.msaa_3d = Viewport.MSAA_2X
+				vp.msaa_3d = Viewport.MSAA_DISABLED
 				vp.use_taa = true
 				vp.screen_space_aa = Viewport.SCREEN_SPACE_AA_DISABLED
 				vp.positional_shadow_atlas_size = 4096
@@ -67,13 +67,13 @@ func apply_preset(preset: int) -> void:
 		_registered_sun.directional_shadow_blend_splits = true
 		match preset:
 			Preset.ULTRA_4070:
-				_registered_sun.directional_shadow_max_distance = 210.0
-				_registered_sun.shadow_blur = 1.25
+				_registered_sun.directional_shadow_max_distance = 155.0
+				_registered_sun.shadow_blur = 1.20
 			Preset.HIGH:
-				_registered_sun.directional_shadow_max_distance = 145.0
+				_registered_sun.directional_shadow_max_distance = 120.0
 				_registered_sun.shadow_blur = 1.05
 			Preset.MEDIUM:
-				_registered_sun.directional_shadow_max_distance = 95.0
+				_registered_sun.directional_shadow_max_distance = 85.0
 				_registered_sun.shadow_blur = 0.8
 
 	if _registered_env != null:
@@ -86,11 +86,7 @@ func apply_preset(preset: int) -> void:
 
 		match preset:
 			Preset.ULTRA_4070:
-				_registered_env.sdfgi_enabled = true
-				_registered_env.sdfgi_use_occlusion = true
-				_registered_env.sdfgi_bounce_feedback = 0.72
-				_registered_env.sdfgi_cascades = 6
-				_registered_env.sdfgi_min_cell_size = 0.35
+				_registered_env.sdfgi_enabled = false
 				_registered_env.ssao_enabled = true
 				_registered_env.ssao_radius = 1.35
 				_registered_env.ssao_intensity = 2.0
@@ -98,7 +94,7 @@ func apply_preset(preset: int) -> void:
 				_registered_env.ssil_radius = 4.2
 				_registered_env.ssil_intensity = 0.95
 				_registered_env.ssr_enabled = true
-				_registered_env.ssr_max_steps = 48
+				_registered_env.ssr_max_steps = 40
 				_registered_env.volumetric_fog_enabled = true
 				_registered_env.volumetric_fog_density = 0.0038
 				_registered_env.volumetric_fog_albedo = Color(0.98, 0.90, 0.78)

@@ -96,9 +96,16 @@ func _build_3d_backdrop() -> void:
 		var pine_mesh := RealisticFoliage._generate_tree_mesh(RealisticFoliage.TreeSpecies.PINE, 88)
 		var pmi := MeshInstance3D.new()
 		pmi.mesh = pine_mesh
-		pmi.position = Vector3(0.6, -0.32, -8.5)
-		pmi.scale = Vector3(0.88, 0.88, 0.88)
+		pmi.position = Vector3(1.1, -0.32, -9.2)
+		pmi.scale = Vector3(0.86, 0.86, 0.86)
 		add_child(pmi)
+
+		var spruce_mesh := RealisticFoliage._generate_tree_mesh(RealisticFoliage.TreeSpecies.SPRUCE, 99)
+		var smi := MeshInstance3D.new()
+		smi.mesh = spruce_mesh
+		smi.position = Vector3(-2.6, -0.32, -8.8)
+		smi.scale = Vector3(0.78, 0.78, 0.78)
+		add_child(smi)
 
 	var bench := AssetCatalog.instantiate_model("res://assets/downloaded/models/painted_wooden_bench/model.gltf")
 	if bench != null:
@@ -249,9 +256,9 @@ func _build_menu_ui() -> void:
 	var left_card := PanelContainer.new()
 	left_card.add_theme_stylebox_override("panel", _make_card_style(Color(0.45, 0.68, 0.95, 0.65)))
 	root.add_child(left_card)
-	left_card.set_anchors_preset(Control.PRESET_CENTER_LEFT)
-	left_card.offset_left = 36
-	left_card.offset_right = 401
+	left_card.set_anchors_preset(Control.PRESET_CENTER)
+	left_card.offset_left = -910
+	left_card.offset_right = -525
 	left_card.offset_top = -215
 	left_card.offset_bottom = 215
 
@@ -334,9 +341,9 @@ func _build_menu_ui() -> void:
 	var right_card := PanelContainer.new()
 	right_card.add_theme_stylebox_override("panel", _make_card_style(Color(0.95, 0.74, 0.35, 0.68)))
 	root.add_child(right_card)
-	right_card.set_anchors_preset(Control.PRESET_CENTER_RIGHT)
-	right_card.offset_left = -416
-	right_card.offset_right = -36
+	right_card.set_anchors_preset(Control.PRESET_CENTER)
+	right_card.offset_left = 525
+	right_card.offset_right = 910
 	right_card.offset_top = -225
 	right_card.offset_bottom = 225
 

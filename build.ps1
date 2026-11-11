@@ -11,7 +11,7 @@ $GodotTag = "4.7.2-stable"
 $TemplateVerDirName = "4.7.2.stable"
 $GodotConsole = Join-Path $RootDir ".engine\Godot_v$GodotTag`_win64_console.exe"
 $ManifestPath = Join-Path $RootDir "assets\downloaded\manifest.json"
-$ExpectedPackVersion = 2
+$ExpectedPackVersion = 3
 
 $NeedSetup = (-not (Test-Path $GodotConsole)) -or (-not (Test-Path $ManifestPath))
 if (-not $NeedSetup) {

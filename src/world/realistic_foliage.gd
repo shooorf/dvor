@@ -1,10 +1,12 @@
 class_name RealisticFoliage
 extends RefCounted
 ## Реалистичная растительность Восточной Европы (Август):
-## 1) Ботанические 3D-деревья 4 пород (берёза повислая, корабельная сосна, ель, садовая яблоня/липа)
-##    с плавными изогнутыми стволами/ветвями (4K PBR кора) и детализированной листвой/хвоей с ветром и просветом солнца.
-## 2) Тысячи реальных 3D-фотосканов Poly Haven (кусты, крапива у заборов, чистотел, папоротник, пни, валежник) через MultiMesh.
-## 3) 55 000+ пучков густой 3D-травы до пояса на GPU (MultiMeshInstance3D + шейдер августовского ветра).
+## 1) Ботанические 3D-деревья 4 пород (берёза повислая, корабельная сосна, европейская ель, садовая яблоня/липа)
+##    с плавными изогнутыми стволами/ветвями (4K PBR кора) и реальными фотосканированными PBR-ветвями/хвоей/листьями
+##    (Poly Haven CC0 + ambientCG CC0) без тяжёлых процедурных циклов в шейдере.
+## 2) Тысячи реальных 3D-фотосканов Poly Haven (кусты, крапива у заборов, чистотел, папоротник, пни, валежник)
+##    с пространственным разбиением MultiMesh по чанкам для мгновенного Frustum & Distance Culling.
+## 3) 56 000+ пучков густой 3D-травы до пояса на GPU (пространственная сетка чанков MultiMesh + шейдер ветра).
 
 enum TreeSpecies {
 	BIRCH = 0,
@@ -13,13 +15,52 @@ enum TreeSpecies {
 	ORCHARD = 3,
 }
 
+# 6-точечные трапециевидные UV-контуры реальных еловых лап Poly Haven fir_twig (0 утечек соседних островов):
+# Порядок вершин: [base_L, base_R, mid_R, tip_R, tip_L, mid_L]
+const FIR_BOUGH_POLYS: Array = [
+	[
+		Vector2(0.415, 0.780), Vector2(0.530, 0.780),
+		Vector2(0.646, 0.565), Vector2(0.595, 0.405),
+		Vector2(0.320, 0.405), Vector2(0.296, 0.590),
+	],
+	[
+		Vector2(0.738, 0.836), Vector2(0.832, 0.836),
+		Vector2(0.960, 0.645), Vector2(0.910, 0.450),
+		Vector2(0.675, 0.450), Vector2(0.630, 0.665),
+	],
+	[
+		Vector2(0.760, 0.374), Vector2(0.848, 0.374),
+		Vector2(0.944, 0.200), Vector2(0.944, 0.034),
+		Vector2(0.648, 0.034), Vector2(0.648, 0.210),
+	],
+	[
+		Vector2(0.268, 0.316), Vector2(0.342, 0.316),
+		Vector2(0.434, 0.165), Vector2(0.434, 0.038),
+		Vector2(0.184, 0.038), Vector2(0.184, 0.180),
+	],
+]
+
+# Полный контур для собранных 1024x1024 RGBA8-атласов ветвей берёзы, яблони и сосны
+const FULL_SPRAY_POLY: Array = [
+	Vector2(0.22, 0.99), Vector2(0.78, 0.99),
+	Vector2(0.99, 0.50), Vector2(0.96, 0.01),
+	Vector2(0.04, 0.01), Vector2(0.01, 0.50),
+]
+
 static var _birch_bark_mat: Material = null
 static var _pine_bark_mat: Material = null
 static var _dark_bark_mat: Material = null
-static var _broadleaf_canopy_mat: Material = null
+static var _pbr_foliage_shader: Shader = null
 static var _birch_canopy_mat: Material = null
-static var _conifer_canopy_mat: Material = null
+static var _pine_canopy_mat: Material = null
+static var _spruce_canopy_mat: Material = null
+static var _orchard_canopy_mat: Material = null
 static var _meadow_grass_mat: Material = null
+
+static var _birch_spray_tex: Texture2D = null
+static var _orchard_spray_tex: Texture2D = null
+static var _pine_bough_tex: Texture2D = null
+static var _flat_normal_tex: Texture2D = null
 
 
 static func populate_world_foliage(parent: Node3D, rng: RandomNumberGenerator) -> void:
@@ -45,7 +86,6 @@ static func _build_trees_and_trunks(parent: Node3D, rng: RandomNumberGenerator) 
 	trunk_bodies.collision_mask = 0
 	parent.add_child(trunk_bodies)
 
-	# Генерируем по 2 органических варианта меша на каждую из 4 пород (ствол+ветви в surface 0, листва/хвоя в surface 1)
 	var species_variants: Dictionary = {}
 	if DisplayServer.get_name() != "headless":
 		for sp in [TreeSpecies.BIRCH, TreeSpecies.PINE, TreeSpecies.SPRUCE, TreeSpecies.ORCHARD]:
@@ -53,7 +93,6 @@ static func _build_trees_and_trunks(parent: Node3D, rng: RandomNumberGenerator) 
 			var v1 := _generate_tree_mesh(sp, 200 + sp * 31)
 			species_variants[sp] = [v0, v1]
 
-	# Списки трансформаций для аппаратного MultiMesh рендеринга по вариантам
 	var transforms_by_key: Dictionary = {}
 	for sp in [TreeSpecies.BIRCH, TreeSpecies.PINE, TreeSpecies.SPRUCE, TreeSpecies.ORCHARD]:
 		transforms_by_key["%d_0" % sp] = []
@@ -95,7 +134,6 @@ static func _build_trees_and_trunks(parent: Node3D, rng: RandomNumberGenerator) 
 		var tx := rng.randf_range(-85.0, 85.0)
 		var tz := rng.randf_range(-85.0, 85.0)
 		var ff := TerrainBuilder.get_forest_factor(tx, tz)
-		# В поле/деревне редкие одиночные рощицы, в лесу — плотный массив
 		var keep_prob := 0.04 + ff * 0.92
 		if rng.randf() > keep_prob:
 			continue
@@ -143,24 +181,26 @@ static func _build_trees_and_trunks(parent: Node3D, rng: RandomNumberGenerator) 
 	if DisplayServer.get_name() == "headless":
 		return
 
-	# Создаём MultiMeshInstance3D для каждого варианта породы дерева (всего 8 батчей на ~700 высокодетализированных деревьев!)
+	# Пространственное разбиение деревьев на чанки 54×54 м (Frustum Culling отсекает ~70% деревьев за спиной камеры)
+	var trees_group := Node3D.new()
+	trees_group.name = "ForestTreeChunks"
+	parent.add_child(trees_group)
+
 	for sp in [TreeSpecies.BIRCH, TreeSpecies.PINE, TreeSpecies.SPRUCE, TreeSpecies.ORCHARD]:
 		for v_idx in range(2):
 			var key := "%d_%d" % [sp, v_idx]
 			var xforms: Array = transforms_by_key[key]
 			if xforms.is_empty():
 				continue
-			var mm := MultiMesh.new()
-			mm.transform_format = MultiMesh.TRANSFORM_3D
-			mm.mesh = species_variants[sp][v_idx]
-			mm.instance_count = xforms.size()
-			for idx in range(xforms.size()):
-				mm.set_instance_transform(idx, xforms[idx])
-			var mmi := MultiMeshInstance3D.new()
-			mmi.name = "Trees_Sp%d_V%d" % [sp, v_idx]
-			mmi.multimesh = mm
-			mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
-			parent.add_child(mmi)
+			_add_multimesh_batch(
+				trees_group,
+				"Trees_Sp%d_V%d" % [sp, v_idx],
+				species_variants[sp][v_idx],
+				xforms,
+				240.0,
+				true,
+				54.0
+			)
 
 
 static func _can_place_tree_at(x: float, z: float, existing: Array[Vector2], min_dist: float) -> bool:
@@ -172,7 +212,6 @@ static func _can_place_tree_at(x: float, z: float, existing: Array[Vector2], min
 		return false
 	if TerrainBuilder.is_inside_building_footprint(x, z, 2.2):
 		return false
-	# Не ставим деревья прямо в костёр и колодец
 	var p := Vector2(x, z)
 	if p.distance_to(Vector2(14.0, -4.0)) < 6.8 or p.distance_to(Vector2(-15.0, -6.0)) < 5.0:
 		return false
@@ -202,7 +241,6 @@ static func _register_tree_instance(
 	var v_idx := rng.randi() % 2
 	(transforms_by_key["%d_%d" % [species, v_idx]] as Array).append(xf)
 
-	# Физический коллайдер ствола (чтобы прятаться за деревьями и отбивать брошенные топоры)
 	var col := CollisionShape3D.new()
 	var cyl := CylinderShape3D.new()
 	var base_r := 0.24 if species == TreeSpecies.BIRCH else (0.31 if species == TreeSpecies.PINE else 0.27)
@@ -235,7 +273,6 @@ static func _populate_fallen_logs_and_stumps(parent: Node3D, trunk_bodies: Stati
 		if i % 3 == 0:
 			var sc := rng.randf_range(1.15, 1.75)
 			log_xforms.append(Transform3D(Basis(Vector3.UP, yaw).scaled(Vector3(sc, sc * 1.25, sc * 1.25)), Vector3(lx, ly + 0.04, lz)))
-			# Коллайдер поваленного бревна
 			var col := CollisionShape3D.new()
 			var box := BoxShape3D.new()
 			box.size = Vector3(2.9 * sc, 0.36 * sc, 0.36 * sc)
@@ -254,15 +291,15 @@ static func _populate_fallen_logs_and_stumps(parent: Node3D, trunk_bodies: Stati
 		return
 
 	if not stump_meshes.is_empty() and not stump_xforms.is_empty():
-		_add_multimesh_batch(parent, "PhotoscannedStumps", stump_meshes[0], stump_xforms, 95.0, true)
+		_add_multimesh_batch(parent, "PhotoscannedStumps", stump_meshes[0], stump_xforms, 95.0, true, 48.0)
 	if not trunk_meshes.is_empty() and not log_xforms.is_empty():
-		_add_multimesh_batch(parent, "PhotoscannedFallenLogs", trunk_meshes[0], log_xforms, 105.0, true)
+		_add_multimesh_batch(parent, "PhotoscannedFallenLogs", trunk_meshes[0], log_xforms, 105.0, true, 48.0)
 	if not branch_meshes.is_empty() and not branch_xforms.is_empty():
-		_add_multimesh_batch(parent, "PhotoscannedDryBranches", branch_meshes[0], branch_xforms, 70.0, false)
+		_add_multimesh_batch(parent, "PhotoscannedDryBranches", branch_meshes[0], branch_xforms, 70.0, false, 48.0)
 
 
 # ============================================================================
-# ПРОЦЕДУРНАЯ ГЕНЕРАЦИЯ ВЫСОКОДЕТАЛИЗИРОВАННЫХ БОТАНИЧЕСКИХ ДЕРЕВЬЕВ
+# БОТАНИЧЕСКАЯ СБОРКА ДЕРЕВЬЕВ С РЕАЛЬНЫМИ ФОТОСКАНАМИ ХВОИ И ЛИСТВЫ
 # ============================================================================
 
 static func _generate_tree_mesh(species: int, seed_val: int) -> ArrayMesh:
@@ -278,94 +315,131 @@ static func _generate_tree_mesh(species: int, seed_val: int) -> ArrayMesh:
 	match species:
 		TreeSpecies.BIRCH:
 			var h := rng.randf_range(10.8, 13.8)
-			var lean := Vector2(rng.randf_range(-0.45, 0.45), rng.randf_range(-0.45, 0.45))
-			var spine := _make_curved_spine(Vector3.ZERO, Vector3(lean.x, h, lean.y), 9, 0.26, rng)
-			_append_tube_along_spine(st_wood, spine, 0.24, 0.035, 10, true)
+			var lean := Vector2(rng.randf_range(-0.42, 0.42), rng.randf_range(-0.42, 0.42))
+			var spine := _make_curved_spine(Vector3.ZERO, Vector3(lean.x, h, lean.y), 9, 0.24, rng)
+			_append_tube_along_spine(st_wood, spine, 0.23, 0.032, 9, true)
+			var crown_dome := Vector3(lean.x * 0.5, h * 0.42, lean.y * 0.5)
 
-			# Ветви берёзы с боковыми развилками и пышной ажурной кроной
-			for b in range(22):
-				var t := lerpf(0.28, 0.95, float(b) / 21.0)
+			# Берёза повислая (Betula pendula): тонкие белые ветви и пышные поникающие каскады мелкой резной листвы
+			for b in range(20):
+				var t := lerpf(0.27, 0.95, float(b) / 19.0)
 				var origin := _sample_spine(spine, t)
-				var yaw := float(b) * 2.399 + rng.randf_range(-0.25, 0.25)
-				var crown_profile := sin(clampf((t - 0.22) / 0.76, 0.0, 1.0) * PI * 0.88)
-				var b_len := (1.2 + 2.4 * crown_profile) * rng.randf_range(0.88, 1.16)
-				var end_pt := origin + Vector3(cos(yaw) * b_len, b_len * 0.36 - 0.18, sin(yaw) * b_len)
-				var b_spine := _make_curved_spine(origin, end_pt, 5, 0.14, rng)
-				b_spine[2].y += 0.28 # Плавный подъём ветви от ствола и мягкий изгиб к кончику
-				_append_tube_along_spine(st_wood, b_spine, lerpf(0.068, 0.026, t), 0.010, 6, false)
+				var yaw := float(b) * 2.399 + rng.randf_range(-0.24, 0.24)
+				var crown_profile := sin(clampf((t - 0.20) / 0.78, 0.0, 1.0) * PI * 0.88)
+				var b_len := (1.15 + 2.35 * crown_profile) * rng.randf_range(0.88, 1.15)
+				var end_pt := origin + Vector3(cos(yaw) * b_len, b_len * 0.34 - 0.18, sin(yaw) * b_len)
+				var b_spine := _make_curved_spine(origin, end_pt, 4, 0.13, rng)
+				b_spine[2].y += 0.26
+				_append_tube_along_spine(st_wood, b_spine, lerpf(0.062, 0.022, t), 0.008, 5, false)
 
-				# Боковая под-ветвь для естественной густоты кроны
 				if b % 2 == 0:
 					var sub_orig := _sample_spine(b_spine, 0.48)
-					var sub_yaw := yaw + (0.62 if (b % 4 == 0) else -0.62)
-					var sub_len := b_len * 0.56
-					var sub_end := sub_orig + Vector3(cos(sub_yaw) * sub_len, sub_len * 0.15 - 0.12, sin(sub_yaw) * sub_len)
-					var sub_spine := _make_curved_spine(sub_orig, sub_end, 3, 0.08, rng)
-					_append_tube_along_spine(st_wood, sub_spine, 0.032, 0.009, 5, false)
-					_append_canopy_rosette(st_leaf, sub_end, rng.randf_range(1.10, 1.42), true, rng)
+					var sub_yaw := yaw + (0.60 if (b % 4 == 0) else -0.60)
+					var sub_len := b_len * 0.54
+					var sub_end := sub_orig + Vector3(cos(sub_yaw) * sub_len, sub_len * 0.12 - 0.16, sin(sub_yaw) * sub_len)
+					var sub_spine := _make_curved_spine(sub_orig, sub_end, 3, 0.07, rng)
+					_append_tube_along_spine(st_wood, sub_spine, 0.026, 0.007, 4, false)
+					_append_spray_rosette(st_leaf, sub_end, crown_dome, rng.randf_range(1.18, 1.52), true, rng)
 
-				for c_step in [0.52, 0.78, 1.0]:
+				for c_step: float in [0.52, 0.80, 1.0]:
 					var cp := _sample_spine(b_spine, c_step)
-					_append_canopy_rosette(st_leaf, cp, rng.randf_range(1.20, 1.62), true, rng)
-			_append_canopy_rosette(st_leaf, spine[spine.size() - 1], 1.55, true, rng)
+					_append_spray_rosette(st_leaf, cp, crown_dome, rng.randf_range(1.25, 1.68), true, rng)
+			_append_spray_rosette(st_leaf, spine[spine.size() - 1], crown_dome, 1.55, true, rng)
 
 		TreeSpecies.PINE:
-			var h2 := rng.randf_range(13.5, 17.2)
-			var lean2 := Vector2(rng.randf_range(-0.55, 0.55), rng.randf_range(-0.55, 0.55))
-			var spine2 := _make_curved_spine(Vector3.ZERO, Vector3(lean2.x, h2, lean2.y), 10, 0.30, rng)
-			_append_tube_along_spine(st_wood, spine2, 0.33, 0.055, 11, true)
+			var h2 := rng.randf_range(13.8, 17.4)
+			var lean2 := Vector2(rng.randf_range(-0.52, 0.52), rng.randf_range(-0.52, 0.52))
+			var spine2 := _make_curved_spine(Vector3.ZERO, Vector3(lean2.x, h2, lean2.y), 10, 0.28, rng)
+			_append_tube_along_spine(st_wood, spine2, 0.33, 0.050, 10, true)
+			var pine_dome := Vector3(lean2.x * 0.6, h2 * 0.56, lean2.y * 0.6)
 
-			# У корабельной сосны нижняя половина ствола чистая, а наверху раскидистая шапка хвои
-			for b in range(24):
-				var t2 := lerpf(0.52, 0.97, float(b) / 23.0)
+			# Корабельная сосна (Pinus sylvestris): чистый янтарный ствол и густые пушистые подушки хвои в верхней кроне
+			for b in range(21):
+				var t2 := lerpf(0.53, 0.97, float(b) / 20.0)
 				var origin2 := _sample_spine(spine2, t2)
-				var yaw2 := float(b) * 2.399 + rng.randf_range(-0.3, 0.3)
-				var spread := sin((t2 - 0.46) * PI * 1.45)
-				var b_len2 := (1.4 + 2.5 * maxf(spread, 0.25)) * rng.randf_range(0.85, 1.2)
-				var end_pt2 := origin2 + Vector3(cos(yaw2) * b_len2, b_len2 * 0.18, sin(yaw2) * b_len2)
-				var b_spine2 := _make_curved_spine(origin2, end_pt2, 4, 0.14, rng)
-				_append_tube_along_spine(st_wood, b_spine2, lerpf(0.09, 0.035, t2), 0.014, 6, false)
+				var yaw2 := float(b) * 2.399 + rng.randf_range(-0.28, 0.28)
+				var spread := sin((t2 - 0.47) * PI * 1.45)
+				var b_len2 := (1.35 + 2.45 * maxf(spread, 0.24)) * rng.randf_range(0.86, 1.18)
+				var end_pt2 := origin2 + Vector3(cos(yaw2) * b_len2, b_len2 * 0.16, sin(yaw2) * b_len2)
+				var b_spine2 := _make_curved_spine(origin2, end_pt2, 4, 0.13, rng)
+				_append_tube_along_spine(st_wood, b_spine2, lerpf(0.088, 0.032, t2), 0.014, 5, false)
 
-				for c_step2 in [0.58, 0.94]:
+				if b % 2 == 1:
+					var ps_orig := _sample_spine(b_spine2, 0.50)
+					var ps_yaw := yaw2 + (0.65 if (b % 4 == 1) else -0.65)
+					var ps_end := ps_orig + Vector3(cos(ps_yaw) * b_len2 * 0.46, 0.16, sin(ps_yaw) * b_len2 * 0.46)
+					var ps_spine := _make_curved_spine(ps_orig, ps_end, 2, 0.05, rng)
+					_append_tube_along_spine(st_wood, ps_spine, 0.036, 0.012, 4, false)
+					_append_spray_rosette(st_leaf, ps_end, pine_dome, rng.randf_range(1.30, 1.68), false, rng)
+
+				for c_step2: float in [0.58, 0.94]:
 					var cp2 := _sample_spine(b_spine2, c_step2)
-					_append_canopy_rosette(st_leaf, cp2, rng.randf_range(1.40, 1.90), false, rng)
-			_append_canopy_rosette(st_leaf, spine2[spine2.size() - 1] + Vector3(0.0, 0.25, 0.0), 1.90, false, rng)
+					_append_spray_rosette(st_leaf, cp2, pine_dome, rng.randf_range(1.38, 1.82), false, rng)
+			_append_spray_rosette(st_leaf, spine2[spine2.size() - 1] + Vector3(0.0, 0.15, 0.0), pine_dome, 1.85, false, rng)
 
 		TreeSpecies.SPRUCE:
-			var h3 := rng.randf_range(11.5, 15.2)
-			var spine3 := _make_curved_spine(Vector3.ZERO, Vector3(rng.randf_range(-0.2, 0.2), h3, rng.randf_range(-0.2, 0.2)), 9, 0.12, rng)
-			_append_tube_along_spine(st_wood, spine3, 0.28, 0.03, 10, true)
+			var h3 := rng.randf_range(12.2, 15.8)
+			var lean3 := Vector2(rng.randf_range(-0.15, 0.15), rng.randf_range(-0.15, 0.15))
+			var spine3 := _make_curved_spine(Vector3.ZERO, Vector3(lean3.x, h3, lean3.y), 9, 0.08, rng)
+			_append_tube_along_spine(st_wood, spine3, 0.27, 0.025, 9, true)
 
-			# Густые ярусы лап ели почти от самой земли (отличное укрытие в лесу!)
-			for tier in range(11):
-				var t3 := lerpf(0.11, 0.95, float(tier) / 10.0)
+			# Европейская ель (Picea abies): 22 густых конических яруса настоящих фотосканированных еловых лап!
+			var tiers := 22
+			for tier in range(tiers):
+				var t3 := lerpf(0.07, 0.965, float(tier) / float(tiers - 1))
 				var origin3 := _sample_spine(spine3, t3)
-				var branches_in_tier := 5 if t3 < 0.7 else 4
-				var b_len3 := lerpf(3.35, 0.75, pow(t3, 0.88))
+				var branches_in_tier := 7 if t3 < 0.38 else (6 if t3 < 0.72 else 5)
+				var b_len3 := lerpf(3.20, 0.44, pow(t3, 0.85)) * rng.randf_range(0.90, 1.12)
+				var tier_dome := origin3 - Vector3(0.0, 1.5 + (1.0 - t3) * 1.2, 0.0)
+
 				for k in range(branches_in_tier):
-					var yaw3 := float(tier) * 0.75 + float(k) * (TAU / float(branches_in_tier)) + rng.randf_range(-0.2, 0.2)
-					var end_pt3 := origin3 + Vector3(cos(yaw3) * b_len3, -0.35 * (1.0 - t3) + 0.12, sin(yaw3) * b_len3)
-					var b_spine3 := _make_curved_spine(origin3, end_pt3, 3, 0.06, rng)
-					_append_tube_along_spine(st_wood, b_spine3, 0.055 * (1.1 - t3 * 0.6), 0.012, 5, false)
-					_append_canopy_rosette(st_leaf, _sample_spine(b_spine3, 0.62), b_len3 * 0.56 + 0.55, false, rng)
-					_append_canopy_rosette(st_leaf, end_pt3, b_len3 * 0.48 + 0.48, false, rng)
-			_append_canopy_rosette(st_leaf, spine3[spine3.size() - 1], 1.05, false, rng)
+					var yaw3 := float(tier) * 0.68 + float(k) * (TAU / float(branches_in_tier)) + rng.randf_range(-0.14, 0.14)
+					var dir_xz := Vector3(cos(yaw3), 0.0, sin(yaw3))
+					var droop_y := -0.46 * (1.0 - t3 * 0.76) + 0.06
+					# Деревянная ветка заканчивается внутри хвойной лапы (0.72 длины), чтобы не торчали голые палки!
+					var wood_mid := origin3 + dir_xz * (b_len3 * 0.38) + Vector3(0.0, droop_y * 0.55, 0.0)
+					var wood_end := origin3 + dir_xz * (b_len3 * 0.72) + Vector3(0.0, droop_y * 0.88, 0.0)
+					_append_tube_along_spine(st_wood, [origin3, wood_mid, wood_end], 0.048 * (1.12 - t3 * 0.65), 0.009, 4, false)
+
+					var full_spine: Array[Vector3] = [
+						origin3,
+						origin3 + dir_xz * (b_len3 * 0.52) + Vector3(0.0, droop_y * 0.78, 0.0),
+						origin3 + dir_xz * b_len3 + Vector3(0.0, droop_y + 0.10 * (1.0 - t3 * 0.5), 0.0),
+					]
+					_append_spruce_branch_boughs(st_leaf, full_spine, yaw3, b_len3, t3, tier_dome, rng)
+
+			# Острая верхушечная стрелка ели
+			var top_pt := spine3[spine3.size() - 1]
+			var top_dome := top_pt - Vector3(0.0, 1.2, 0.0)
+			for s_idx in range(4):
+				var syaw := float(s_idx) * (TAU / 4.0) + rng.randf_range(-0.18, 0.18)
+				var sb := Basis(Vector3.UP, syaw) * Basis(Vector3.RIGHT, deg_to_rad(-56.0))
+				var poly_top: Array = FIR_BOUGH_POLYS[2 + (s_idx % 2)]
+				_append_curved_bough_card(st_leaf, top_pt - Vector3(0.0, 0.22, 0.0), sb, 0.56, 0.80, -0.05, 0.34, 0.75, poly_top, top_dome, rng.randf(), 0.98)
 
 		_: # ORCHARD (раскидистая садовая яблоня / липа у деревенских домов)
 			var h4 := rng.randf_range(5.8, 7.6)
 			var fork_h := h4 * 0.36
 			var trunk_spine := _make_curved_spine(Vector3.ZERO, Vector3(0.08, fork_h, -0.06), 5, 0.14, rng)
-			_append_tube_along_spine(st_wood, trunk_spine, 0.24, 0.15, 9, true)
+			_append_tube_along_spine(st_wood, trunk_spine, 0.24, 0.15, 8, true)
 			var fork_pt := trunk_spine[trunk_spine.size() - 1]
+			var orch_dome := Vector3(0.0, h4 * 0.36, 0.0)
 
 			for limb in range(7):
-				var yaw4 := float(limb) * (TAU / 7.0) + rng.randf_range(-0.25, 0.25)
-				var rad4 := rng.randf_range(2.3, 3.3)
-				var limb_end := fork_pt + Vector3(cos(yaw4) * rad4, h4 - fork_h + rng.randf_range(-0.6, 0.6), sin(yaw4) * rad4)
-				var l_spine := _make_curved_spine(fork_pt, limb_end, 5, 0.20, rng)
-				_append_tube_along_spine(st_wood, l_spine, 0.11, 0.022, 6, false)
-				for c_step4 in [0.48, 0.76, 1.0]:
-					_append_canopy_rosette(st_leaf, _sample_spine(l_spine, c_step4), rng.randf_range(1.38, 1.78), false, rng)
+				var yaw4 := float(limb) * (TAU / 7.0) + rng.randf_range(-0.24, 0.24)
+				var rad4 := rng.randf_range(2.25, 3.20)
+				var limb_end := fork_pt + Vector3(cos(yaw4) * rad4, h4 - fork_h + rng.randf_range(-0.55, 0.55), sin(yaw4) * rad4)
+				var l_spine := _make_curved_spine(fork_pt, limb_end, 5, 0.18, rng)
+				_append_tube_along_spine(st_wood, l_spine, 0.105, 0.020, 5, false)
+
+				var sub_o := _sample_spine(l_spine, 0.50)
+				var sub_y4 := yaw4 + (0.58 if limb % 2 == 0 else -0.58)
+				var sub_e4 := sub_o + Vector3(cos(sub_y4) * rad4 * 0.46, 0.32, sin(sub_y4) * rad4 * 0.46)
+				_append_tube_along_spine(st_wood, [sub_o, sub_e4], 0.040, 0.012, 4, false)
+				_append_spray_rosette(st_leaf, sub_e4, orch_dome, rng.randf_range(1.28, 1.58), false, rng)
+
+				for c_step4: float in [0.46, 0.76, 1.0]:
+					_append_spray_rosette(st_leaf, _sample_spine(l_spine, c_step4), orch_dome, rng.randf_range(1.34, 1.72), false, rng)
 
 	st_wood.generate_tangents()
 	st_leaf.generate_tangents()
@@ -377,18 +451,461 @@ static func _generate_tree_mesh(species: int, seed_val: int) -> ArrayMesh:
 	match species:
 		TreeSpecies.BIRCH:
 			mesh.surface_set_material(0, _get_birch_bark_material())
-			mesh.surface_set_material(1, _get_canopy_material(0))
+			mesh.surface_set_material(1, _get_canopy_material(TreeSpecies.BIRCH))
 		TreeSpecies.PINE:
 			mesh.surface_set_material(0, _get_pine_bark_material())
-			mesh.surface_set_material(1, _get_canopy_material(1))
+			mesh.surface_set_material(1, _get_canopy_material(TreeSpecies.PINE))
 		TreeSpecies.SPRUCE:
 			mesh.surface_set_material(0, _get_dark_bark_material())
-			mesh.surface_set_material(1, _get_canopy_material(1))
+			mesh.surface_set_material(1, _get_canopy_material(TreeSpecies.SPRUCE))
 		_:
 			mesh.surface_set_material(0, _get_dark_bark_material())
-			mesh.surface_set_material(1, _get_canopy_material(2))
+			mesh.surface_set_material(1, _get_canopy_material(TreeSpecies.ORCHARD))
 
 	return mesh
+
+
+## Раскладывает веер настоящих фотосканированных еловых лап СТРОГО вдоль направления ветви ели
+static func _append_spruce_branch_boughs(
+	st: SurfaceTool,
+	b_spine: Array[Vector3],
+	branch_yaw: float,
+	b_len: float,
+	height_t: float,
+	dome_origin: Vector3,
+	rng: RandomNumberGenerator
+) -> void:
+	# В Basis(UP, card_yaw) ось +Z смотрит в (sin(card_yaw), 0, cos(card_yaw)).
+	# Чтобы +Z точно совпадала с веткой (cos(branch_yaw), 0, sin(branch_yaw)), card_yaw = PI * 0.5 - branch_yaw!
+	var align_yaw := PI * 0.5 - branch_yaw
+	var size_scale := clampf(b_len * 0.54 + 0.44, 0.56, 1.72)
+
+	# Внутренний ярус лап у ствола (закрывает просветы между ярусами!)
+	if height_t < 0.76:
+		var p_inner := _sample_spine(b_spine, 0.20)
+		for side: float in [-1.0, 1.0]:
+			var byaw: float = align_yaw + side * rng.randf_range(0.46, 0.64)
+			var bpitch := deg_to_rad(rng.randf_range(12.0, 24.0))
+			var broll: float = side * deg_to_rad(rng.randf_range(8.0, 16.0))
+			var basis := Basis(Vector3.UP, byaw) * Basis(Vector3.RIGHT, bpitch) * Basis(Vector3.FORWARD, broll)
+			var poly: Array = FIR_BOUGH_POLYS[rng.randi() % 4]
+			var l := size_scale * rng.randf_range(0.84, 1.04)
+			_append_curved_bough_card(st, p_inner, basis, l * 0.94, l, -0.13 * l, 0.34, 0.84, poly, dome_origin, rng.randf(), 0.66)
+
+	# Средний пышный веер (левая, правая и верхняя центральная еловая лапа)
+	var p_mid := _sample_spine(b_spine, 0.46)
+	for side2: float in [-1.0, 1.0]:
+		var myaw: float = align_yaw + side2 * rng.randf_range(0.32, 0.48)
+		var mpitch := deg_to_rad(rng.randf_range(10.0, 20.0))
+		var mroll: float = side2 * deg_to_rad(rng.randf_range(7.0, 14.0))
+		var mbasis := Basis(Vector3.UP, myaw) * Basis(Vector3.RIGHT, mpitch) * Basis(Vector3.FORWARD, mroll)
+		var mpoly: Array = FIR_BOUGH_POLYS[rng.randi() % 2]
+		var ml := size_scale * rng.randf_range(0.90, 1.10)
+		_append_curved_bough_card(st, p_mid, mbasis, ml * 0.96, ml, -0.14 * ml, 0.34, 0.84, mpoly, dome_origin, rng.randf(), 0.82)
+
+	if height_t < 0.86:
+		var cbasis := Basis(Vector3.UP, align_yaw + rng.randf_range(-0.08, 0.08)) * Basis(Vector3.RIGHT, deg_to_rad(8.0))
+		var cl := size_scale * rng.randf_range(0.84, 1.02)
+		_append_curved_bough_card(st, p_mid + Vector3(0.0, 0.04, 0.0), cbasis, cl * 0.92, cl, -0.10 * cl, 0.34, 0.84, FIR_BOUGH_POLYS[rng.randi() % 2], dome_origin, rng.randf(), 0.90)
+
+	# Концевая пушистая лапа, полностью укрывающая конец деревянной ветви
+	var p_tip := _sample_spine(b_spine, 0.68)
+	var tbasis := Basis(Vector3.UP, align_yaw + rng.randf_range(-0.06, 0.06)) * Basis(Vector3.RIGHT, deg_to_rad(rng.randf_range(2.0, 12.0)))
+	var tl := size_scale * rng.randf_range(0.92, 1.12)
+	_append_curved_bough_card(st, p_tip, tbasis, tl * 0.96, tl, -0.10 * tl, 0.32, 0.86, FIR_BOUGH_POLYS[rng.randi() % 2], dome_origin, rng.randf(), 0.98)
+
+
+## Объёмная 3D-розетка из 6 многолистных фотосканированных ветвей (для берёзы, сосны и яблони)
+static func _append_spray_rosette(
+	st: SurfaceTool,
+	center: Vector3,
+	dome_origin: Vector3,
+	radius: float,
+	drooping: bool,
+	rng: RandomNumberGenerator
+) -> void:
+	var card_count := 6
+	var base_yaw := rng.randf() * TAU
+	for c in range(card_count):
+		var yaw := base_yaw + float(c) * (TAU / float(card_count)) + rng.randf_range(-0.24, 0.24)
+		var tier := c % 3
+		var pitch_deg: float
+		if drooping:
+			pitch_deg = rng.randf_range(-10.0, 10.0) if tier == 0 else (rng.randf_range(14.0, 32.0) if tier == 1 else rng.randf_range(30.0, 48.0))
+		else:
+			pitch_deg = rng.randf_range(-18.0, 4.0) if tier == 0 else (rng.randf_range(6.0, 22.0) if tier == 1 else rng.randf_range(18.0, 32.0))
+		var roll := rng.randf_range(-0.30, 0.30)
+		var basis := Basis(Vector3.UP, yaw) * Basis(Vector3.RIGHT, deg_to_rad(pitch_deg)) * Basis(Vector3.FORWARD, roll)
+
+		var sz := radius * rng.randf_range(0.96, 1.18)
+		var arch := (-0.16 if drooping else -0.10) * sz
+		var card_origin := center + Vector3(
+			cos(yaw) * radius * 0.10,
+			(0.14 if tier == 0 else (0.02 if tier == 1 else -0.08)) * radius,
+			sin(yaw) * radius * 0.10
+		)
+		var ao := 0.98 if tier == 0 else (0.86 if tier == 1 else 0.72)
+		_append_curved_bough_card(st, card_origin, basis, sz, sz, arch, 0.56, 0.92, FULL_SPRAY_POLY, dome_origin, rng.randf(), ao)
+
+
+static func _append_curved_bough_card(
+	st: SurfaceTool,
+	card_origin: Vector3,
+	basis: Basis,
+	w: float,
+	l: float,
+	arch_y: float,
+	base_taper: float,
+	tip_taper: float,
+	uv_poly: Array,
+	dome_origin: Vector3,
+	seed_val: float,
+	ao_val: float
+) -> void:
+	var hw_base := w * 0.5 * base_taper
+	var hw_mid := w * 0.5
+	var hw_tip := w * 0.5 * tip_taper
+
+	var p00 := card_origin + basis * Vector3(-hw_base, 0.0, -l * 0.06)
+	var p10 := card_origin + basis * Vector3(hw_base, 0.0, -l * 0.06)
+	var p0m := card_origin + basis * Vector3(-hw_mid, arch_y * 0.35, l * 0.44)
+	var p1m := card_origin + basis * Vector3(hw_mid, arch_y * 0.35, l * 0.44)
+	var p01 := card_origin + basis * Vector3(-hw_tip, arch_y, l * 0.94)
+	var p11 := card_origin + basis * Vector3(hw_tip, arch_y, l * 0.94)
+
+	var n00 := (p00 - dome_origin).normalized()
+	var n10 := (p10 - dome_origin).normalized()
+	var n0m := (p0m - dome_origin).normalized()
+	var n1m := (p1m - dome_origin).normalized()
+	var n01 := (p01 - dome_origin).normalized()
+	var n11 := (p11 - dome_origin).normalized()
+
+	var uv00: Vector2 = uv_poly[0]
+	var uv10: Vector2 = uv_poly[1]
+	var uv1m: Vector2 = uv_poly[2]
+	var uv11: Vector2 = uv_poly[3]
+	var uv01: Vector2 = uv_poly[4]
+	var uv0m: Vector2 = uv_poly[5]
+
+	var base_col := Color(seed_val, 0.12, ao_val * 0.86, 1.0)
+	var mid_col  := Color(seed_val, 0.52, ao_val * 0.94, 1.0)
+	var tip_col  := Color(seed_val, 1.00, ao_val, 1.0)
+
+	st.set_normal(n00); st.set_color(base_col); st.set_uv(uv00); st.add_vertex(p00)
+	st.set_normal(n1m); st.set_color(mid_col);  st.set_uv(uv1m); st.add_vertex(p1m)
+	st.set_normal(n0m); st.set_color(mid_col);  st.set_uv(uv0m); st.add_vertex(p0m)
+
+	st.set_normal(n00); st.set_color(base_col); st.set_uv(uv00); st.add_vertex(p00)
+	st.set_normal(n10); st.set_color(base_col); st.set_uv(uv10); st.add_vertex(p10)
+	st.set_normal(n1m); st.set_color(mid_col);  st.set_uv(uv1m); st.add_vertex(p1m)
+
+	st.set_normal(n0m); st.set_color(mid_col);  st.set_uv(uv0m); st.add_vertex(p0m)
+	st.set_normal(n11); st.set_color(tip_col);  st.set_uv(uv11); st.add_vertex(p11)
+	st.set_normal(n01); st.set_color(tip_col);  st.set_uv(uv01); st.add_vertex(p01)
+
+	st.set_normal(n0m); st.set_color(mid_col);  st.set_uv(uv0m); st.add_vertex(p0m)
+	st.set_normal(n1m); st.set_color(mid_col);  st.set_uv(uv1m); st.add_vertex(p1m)
+	st.set_normal(n11); st.set_color(tip_col);  st.set_uv(uv11); st.add_vertex(p11)
+
+
+# ============================================================================
+# СБОРКА СОСТАВНЫХ RGBA8-ТЕКСТУР ВЕТВЕЙ ИЗ ФОТОСКАНОВ (1 РАЗ ПРИ СТАРТЕ, C++ BLIT)
+# ============================================================================
+
+static func _load_image_any(res_path: String) -> Image:
+	if ResourceLoader.exists(res_path):
+		var tex := load(res_path)
+		if tex is Texture2D:
+			var img := (tex as Texture2D).get_image()
+			if img != null and not img.is_empty():
+				if img.is_compressed():
+					img.decompress()
+				return img
+	var abs_p := ProjectSettings.globalize_path(res_path)
+	if FileAccess.file_exists(abs_p):
+		return Image.load_from_file(abs_p)
+	return null
+
+
+static func _extract_rgba_crop(
+	diff_path: String,
+	alpha_path: String,
+	uv_rect: Rect2,
+	target_w: int,
+	target_h: int,
+	bleed_rgb: Color,
+	mask_pine_corner: bool = false
+) -> Image:
+	var d_img := _load_image_any(diff_path)
+	var a_img := _load_image_any(alpha_path)
+	if d_img == null or a_img == null or d_img.is_empty() or a_img.is_empty():
+		var fallback := Image.create(target_w, target_h, false, Image.FORMAT_RGBA8)
+		fallback.fill(Color(bleed_rgb.r, bleed_rgb.g, bleed_rgb.b, 0.0))
+		return fallback
+
+	var rx := int(uv_rect.position.x * float(d_img.get_width()))
+	var ry := int(uv_rect.position.y * float(d_img.get_height()))
+	var rw := maxi(8, int(uv_rect.size.x * float(d_img.get_width())))
+	var rh := maxi(8, int(uv_rect.size.y * float(d_img.get_height())))
+
+	var dc := d_img.get_region(Rect2i(rx, ry, rw, rh))
+	var ac := a_img.get_region(Rect2i(
+		int(uv_rect.position.x * float(a_img.get_width())),
+		int(uv_rect.position.y * float(a_img.get_height())),
+		maxi(8, int(uv_rect.size.x * float(a_img.get_width()))),
+		maxi(8, int(uv_rect.size.y * float(a_img.get_height())))
+	))
+	dc.resize(target_w, target_h, Image.INTERPOLATE_BILINEAR)
+	ac.resize(target_w, target_h, Image.INTERPOLATE_BILINEAR)
+
+	var out := Image.create(target_w, target_h, false, Image.FORMAT_RGBA8)
+	for y in range(target_h):
+		var v_norm := float(y) / float(target_h)
+		for x in range(target_w):
+			var a := ac.get_pixel(x, y).r
+			if mask_pine_corner and v_norm > 0.80:
+				var u_norm := float(x) / float(target_w)
+				if u_norm < 0.24 or u_norm > 0.76:
+					a = 0.0
+			if a < 0.14:
+				out.set_pixel(x, y, Color(bleed_rgb.r, bleed_rgb.g, bleed_rgb.b, 0.0))
+			else:
+				var c := dc.get_pixel(x, y)
+				var inv := 1.0 / maxf(a, 0.38)
+				out.set_pixel(x, y, Color(
+					clampf(c.r * inv, 0.0, 1.0),
+					clampf(c.g * inv, 0.0, 1.0),
+					clampf(c.b * inv, 0.0, 1.0),
+					clampf((a - 0.12) / 0.88, 0.0, 1.0)
+				))
+	return out
+
+
+static func _rotate_rgba_stamp(src: Image, angle_rad: float, bleed_rgb: Color) -> Image:
+	var sw := src.get_width()
+	var sh := src.get_height()
+	var cs := cos(angle_rad)
+	var sn := sin(angle_rad)
+	var dw := int(ceil(absf(float(sw) * cs) + absf(float(sh) * sn))) + 2
+	var dh := int(ceil(absf(float(sw) * sn) + absf(float(sh) * cs))) + 2
+	var dst := Image.create(dw, dh, false, Image.FORMAT_RGBA8)
+	dst.fill(Color(bleed_rgb.r, bleed_rgb.g, bleed_rgb.b, 0.0))
+
+	var cx := float(sw) * 0.5
+	var cy := float(sh) * 0.5
+	var dcx := float(dw) * 0.5
+	var dcy := float(dh) * 0.5
+
+	for dy in range(dh):
+		var ry := float(dy) - dcy
+		for dx in range(dw):
+			var rx := float(dx) - dcx
+			var sx := int(round(rx * cs + ry * sn + cx))
+			var sy := int(round(-rx * sn + ry * cs + cy))
+			if sx >= 0 and sx < sw and sy >= 0 and sy < sh:
+				var p := src.get_pixel(sx, sy)
+				if p.a > 0.05:
+					dst.set_pixel(dx, dy, p)
+	return dst
+
+
+static func _draw_wood_twig_segment(canvas: Image, p0: Vector2, p1: Vector2, r0: float, r1: float, col: Color) -> void:
+	var steps := maxi(8, int(p0.distance_to(p1) * 0.6))
+	for i in range(steps + 1):
+		var t := float(i) / float(steps)
+		var p := p0.lerp(p1, t)
+		var r := maxi(1, int(round(lerpf(r0, r1, t))))
+		canvas.fill_rect(Rect2i(int(p.x) - r, int(p.y) - r, r * 2 + 1, r * 2 + 1), col)
+
+
+static func _stamp_centered(canvas: Image, stamp: Image, center: Vector2i) -> void:
+	var sw := stamp.get_width()
+	var sh := stamp.get_height()
+	var dst_pt := Vector2i(center.x - sw / 2, center.y - sh / 2)
+	canvas.blit_rect_mask(stamp, stamp, Rect2i(0, 0, sw, sh), dst_pt)
+
+
+static func _get_birch_spray_texture() -> Texture2D:
+	if _birch_spray_tex != null:
+		return _birch_spray_tex
+	var bleed := Color(0.22, 0.34, 0.09, 0.0)
+	# Небольшой штамп 136x168 px => на карточке 1.35 м каждый отдельный листик берёзы имеет реалистичный размер ~6.5 см!
+	var twig0 := _extract_rgba_crop(
+		"res://assets/downloaded/textures/leaf_twig/diff.jpg",
+		"res://assets/downloaded/textures/leaf_twig/alpha.jpg",
+		Rect2(0.014, 0.006, 0.400, 0.984),
+		136, 168, bleed, false
+	)
+	var twig_flip := twig0.duplicate() as Image
+	twig_flip.flip_x()
+
+	var twig_r36 := _rotate_rgba_stamp(twig0, deg_to_rad(36.0), bleed)
+	var twig_l36 := twig_r36.duplicate() as Image
+	twig_l36.flip_x()
+
+	var twig_r64 := _rotate_rgba_stamp(twig0, deg_to_rad(64.0), bleed)
+	var twig_l64 := twig_r64.duplicate() as Image
+	twig_l64.flip_x()
+
+	var canvas := Image.create(1024, 1024, false, Image.FORMAT_RGBA8)
+	canvas.fill(bleed)
+
+	var wood_col := Color(0.26, 0.20, 0.15, 1.0)
+	_draw_wood_twig_segment(canvas, Vector2(512, 990), Vector2(500, 540), 4.0, 2.5, wood_col)
+	_draw_wood_twig_segment(canvas, Vector2(500, 540), Vector2(516, 135), 2.5, 1.2, wood_col)
+
+	var side_specs := [
+		[Vector2(508, 860), Vector2(210, 650), true],
+		[Vector2(506, 820), Vector2(815, 610), false],
+		[Vector2(503, 660), Vector2(165, 430), true],
+		[Vector2(502, 620), Vector2(855, 395), false],
+		[Vector2(506, 450), Vector2(235, 235), true],
+		[Vector2(510, 415), Vector2(785, 210), false],
+	]
+	for sp in side_specs:
+		var a: Vector2 = sp[0]
+		var b: Vector2 = sp[1]
+		var is_left: bool = sp[2]
+		_draw_wood_twig_segment(canvas, a, b, 2.2, 1.0, wood_col)
+		for f: float in [0.36, 0.68, 0.98]:
+			var pt := a.lerp(b, f)
+			var st_img: Image = (twig_l64 if f > 0.6 else twig_l36) if is_left else (twig_r64 if f > 0.6 else twig_r36)
+			_stamp_centered(canvas, st_img, Vector2i(int(pt.x), int(pt.y)))
+
+	# Верхушечные и приствольные ажурные побеги
+	for c_pt in [
+		[Vector2i(465, 745), twig_l36],
+		[Vector2i(555, 700), twig_r36],
+		[Vector2i(455, 520), twig0],
+		[Vector2i(560, 485), twig_flip],
+		[Vector2i(465, 310), twig_l36],
+		[Vector2i(560, 285), twig_r36],
+		[Vector2i(512, 145), twig0],
+		[Vector2i(435, 165), twig_l36],
+		[Vector2i(590, 165), twig_r36],
+	]:
+		_stamp_centered(canvas, c_pt[1], c_pt[0])
+
+	canvas.generate_mipmaps()
+	_birch_spray_tex = ImageTexture.create_from_image(canvas)
+	return _birch_spray_tex
+
+
+static func _get_orchard_spray_texture() -> Texture2D:
+	if _orchard_spray_tex != null:
+		return _orchard_spray_tex
+	var bleed := Color(0.18, 0.31, 0.08, 0.0)
+	var twig0 := _extract_rgba_crop(
+		"res://assets/downloaded/textures/leaf_twig/diff.jpg",
+		"res://assets/downloaded/textures/leaf_twig/alpha.jpg",
+		Rect2(0.014, 0.006, 0.400, 0.984),
+		168, 206, bleed, false
+	)
+	var twig_flip := twig0.duplicate() as Image
+	twig_flip.flip_x()
+	var twig_r42 := _rotate_rgba_stamp(twig0, deg_to_rad(42.0), bleed)
+	var twig_l42 := twig_r42.duplicate() as Image
+	twig_l42.flip_x()
+	var twig_r72 := _rotate_rgba_stamp(twig0, deg_to_rad(72.0), bleed)
+	var twig_l72 := twig_r72.duplicate() as Image
+	twig_l72.flip_x()
+
+	var canvas := Image.create(1024, 1024, false, Image.FORMAT_RGBA8)
+	canvas.fill(bleed)
+
+	var wood_col := Color(0.24, 0.18, 0.13, 1.0)
+	_draw_wood_twig_segment(canvas, Vector2(512, 990), Vector2(512, 150), 5.0, 1.5, wood_col)
+
+	for sp in [
+		[Vector2(512, 850), Vector2(185, 620), true],
+		[Vector2(512, 820), Vector2(840, 595), false],
+		[Vector2(512, 640), Vector2(155, 405), true],
+		[Vector2(512, 610), Vector2(865, 385), false],
+		[Vector2(512, 430), Vector2(230, 215), true],
+		[Vector2(512, 410), Vector2(795, 200), false],
+	]:
+		var a: Vector2 = sp[0]
+		var b: Vector2 = sp[1]
+		var is_left: bool = sp[2]
+		_draw_wood_twig_segment(canvas, a, b, 2.8, 1.2, wood_col)
+		for f: float in [0.32, 0.65, 0.96]:
+			var pt := a.lerp(b, f)
+			var st_img: Image = (twig_l72 if f > 0.6 else twig_l42) if is_left else (twig_r72 if f > 0.6 else twig_r42)
+			_stamp_centered(canvas, st_img, Vector2i(int(pt.x), int(pt.y)))
+
+	for c_pt in [
+		[Vector2i(480, 740), twig0],
+		[Vector2i(545, 680), twig_flip],
+		[Vector2i(475, 510), twig_l42],
+		[Vector2i(555, 490), twig_r42],
+		[Vector2i(512, 310), twig0],
+		[Vector2i(425, 175), twig_l42],
+		[Vector2i(600, 175), twig_r42],
+		[Vector2i(512, 140), twig_flip],
+	]:
+		_stamp_centered(canvas, c_pt[1], c_pt[0])
+
+	canvas.generate_mipmaps()
+	_orchard_spray_tex = ImageTexture.create_from_image(canvas)
+	return _orchard_spray_tex
+
+
+static func _get_pine_bough_texture() -> Texture2D:
+	if _pine_bough_tex != null:
+		return _pine_bough_tex
+	var bleed := Color(0.14, 0.24, 0.08, 0.0)
+	var shoot0 := _extract_rgba_crop(
+		"res://assets/downloaded/textures/pine_twig/diff.jpg",
+		"res://assets/downloaded/textures/pine_twig/alpha.jpg",
+		Rect2(0.028, 0.038, 0.192, 0.398),
+		148, 296, bleed, true
+	)
+	var shoot_flip := shoot0.duplicate() as Image
+	shoot_flip.flip_x()
+	var shoot_r35 := _rotate_rgba_stamp(shoot0, deg_to_rad(35.0), bleed)
+	var shoot_l35 := shoot_r35.duplicate() as Image
+	shoot_l35.flip_x()
+	var shoot_r65 := _rotate_rgba_stamp(shoot0, deg_to_rad(65.0), bleed)
+	var shoot_l65 := shoot_r65.duplicate() as Image
+	shoot_l65.flip_x()
+
+	var canvas := Image.create(1024, 1024, false, Image.FORMAT_RGBA8)
+	canvas.fill(bleed)
+
+	var bark_col := Color(0.32, 0.21, 0.13, 1.0)
+	_draw_wood_twig_segment(canvas, Vector2(512, 975), Vector2(512, 260), 6.0, 2.5, bark_col)
+	_draw_wood_twig_segment(canvas, Vector2(512, 760), Vector2(230, 480), 4.0, 2.0, bark_col)
+	_draw_wood_twig_segment(canvas, Vector2(512, 740), Vector2(795, 470), 4.0, 2.0, bark_col)
+	_draw_wood_twig_segment(canvas, Vector2(512, 520), Vector2(280, 260), 3.2, 1.8, bark_col)
+	_draw_wood_twig_segment(canvas, Vector2(512, 500), Vector2(745, 250), 3.2, 1.8, bark_col)
+
+	# Густые веера сосновой хвои вдоль ветви и развилок
+	for st_spec in [
+		[Vector2i(350, 660), shoot_l65], [Vector2i(675, 650), shoot_r65],
+		[Vector2i(220, 500), shoot_l65], [Vector2i(805, 490), shoot_r65],
+		[Vector2i(265, 410), shoot_l35], [Vector2i(760, 400), shoot_r35],
+		[Vector2i(395, 540), shoot_l35], [Vector2i(630, 530), shoot_r35],
+		[Vector2i(320, 290), shoot_l65], [Vector2i(705, 285), shoot_r65],
+		[Vector2i(270, 220), shoot_l35], [Vector2i(755, 215), shoot_r35],
+		[Vector2i(420, 350), shoot0],     [Vector2i(605, 345), shoot_flip],
+		[Vector2i(435, 195), shoot_l35], [Vector2i(590, 195), shoot_r35],
+		[Vector2i(512, 175), shoot0],     [Vector2i(512, 390), shoot_flip],
+		[Vector2i(485, 610), shoot0],     [Vector2i(540, 620), shoot_flip],
+	]:
+		_stamp_centered(canvas, st_spec[1], st_spec[0])
+
+	canvas.generate_mipmaps()
+	_pine_bough_tex = ImageTexture.create_from_image(canvas)
+	return _pine_bough_tex
+
+
+static func _get_flat_normal_texture() -> Texture2D:
+	if _flat_normal_tex != null:
+		return _flat_normal_tex
+	var img := Image.create(4, 4, false, Image.FORMAT_RGB8)
+	img.fill(Color(0.5, 0.5, 1.0, 1.0))
+	_flat_normal_tex = ImageTexture.create_from_image(img)
+	return _flat_normal_tex
 
 
 static func _make_curved_spine(p_start: Vector3, p_end: Vector3, segments: int, wander: float, rng: RandomNumberGenerator) -> Array[Vector3]:
@@ -437,7 +954,6 @@ static func _append_tube_along_spine(
 		if i > 0:
 			v_accum += spine[i].distance_to(spine[i - 1]) * 0.65
 
-		# Параллельный перенос базиса без резких перекручиваний и с правильной правой ориентацией (нормали строго НАРУЖУ!)
 		var right: Vector3
 		if i == 0 or prev_right.length_squared() < 0.01:
 			var ref := Vector3.FORWARD if absf(tangent.dot(Vector3.UP)) > 0.75 else Vector3.UP
@@ -490,91 +1006,6 @@ static func _append_tube_along_spine(
 			st.set_normal(n0[s + 1]); st.set_color(col0); st.set_uv(Vector2(u1, v0)); st.add_vertex(r0[s + 1])
 
 
-static func _append_canopy_rosette(
-	st: SurfaceTool,
-	center: Vector3,
-	radius: float,
-	drooping: bool,
-	rng: RandomNumberGenerator
-) -> void:
-	# Объёмное 3D-облако ветвей кроны со сферическими нормалями и пропорциями UV 1:1 (без растянутых полос!)
-	var card_count := 9 if drooping else 8
-	var base_yaw := rng.randf() * TAU
-	# Центр сферы нормалей смещён значительно ниже розетки, чтобы все нормали листьев смотрели вверх-наружу к солнцу
-	var dome_origin := center - Vector3(0.0, radius * 1.45, 0.0)
-
-	for c in range(card_count):
-		var yaw := base_yaw + float(c) * (TAU / float(card_count)) + rng.randf_range(-0.24, 0.24)
-		var layer_tier := c % 3
-		var pitch_deg: float
-		if drooping:
-			if layer_tier == 0:
-				pitch_deg = rng.randf_range(-12.0, 10.0)
-			elif layer_tier == 1:
-				pitch_deg = rng.randf_range(12.0, 30.0)
-			else:
-				pitch_deg = rng.randf_range(30.0, 46.0)
-		else:
-			if layer_tier == 0:
-				pitch_deg = rng.randf_range(-18.0, 4.0)
-			elif layer_tier == 1:
-				pitch_deg = rng.randf_range(6.0, 22.0)
-			else:
-				pitch_deg = rng.randf_range(20.0, 34.0)
-		var roll := rng.randf_range(-0.32, 0.32)
-		var basis := Basis(Vector3.UP, yaw) * Basis(Vector3.RIGHT, deg_to_rad(pitch_deg)) * Basis(Vector3.FORWARD, roll)
-
-		# Квадратная пропорция (w == l) исключает диагональное растяжение листьев в шейдере!
-		var sz := radius * rng.randf_range(1.02, 1.24)
-		var w := sz
-		var l := sz
-		var arch := (-0.16 if drooping else -0.10) * sz
-
-		var card_origin := center + Vector3(
-			cos(yaw) * radius * 0.12,
-			(0.18 if layer_tier == 0 else (0.04 if layer_tier == 1 else -0.08)) * radius,
-			sin(yaw) * radius * 0.12
-		)
-
-		var p00 := card_origin + basis * Vector3(-w * 0.5, 0.0, -l * 0.12)
-		var p10 := card_origin + basis * Vector3(w * 0.5, 0.0, -l * 0.12)
-		var p0m := card_origin + basis * Vector3(-w * 0.52, arch * 0.32, l * 0.38)
-		var p1m := card_origin + basis * Vector3(w * 0.52, arch * 0.32, l * 0.38)
-		var p01 := card_origin + basis * Vector3(-w * 0.46, arch, l * 0.88)
-		var p11 := card_origin + basis * Vector3(w * 0.46, arch, l * 0.88)
-
-		# Сферические нормали купола кроны для мягкого объёмного солнечного освещения
-		var n00 := (p00 - dome_origin).normalized()
-		var n10 := (p10 - dome_origin).normalized()
-		var n0m := (p0m - dome_origin).normalized()
-		var n1m := (p1m - dome_origin).normalized()
-		var n01 := (p01 - dome_origin).normalized()
-		var n11 := (p11 - dome_origin).normalized()
-
-		var seed_val := rng.randf()
-		var base_col := Color(seed_val, 0.15, 0.65, 1.0)
-		var mid_col  := Color(seed_val, 0.55, 0.85, 1.0)
-		var tip_col  := Color(seed_val, 1.00, 1.00, 1.0)
-
-		# Сегмент 1 (обход по часовой стрелке сверху -> лицевая нормаль +Y)
-		st.set_normal(n00); st.set_color(base_col); st.set_uv(Vector2(0.0, 1.0)); st.add_vertex(p00)
-		st.set_normal(n1m); st.set_color(mid_col);  st.set_uv(Vector2(1.0, 0.5)); st.add_vertex(p1m)
-		st.set_normal(n0m); st.set_color(mid_col);  st.set_uv(Vector2(0.0, 0.5)); st.add_vertex(p0m)
-
-		st.set_normal(n00); st.set_color(base_col); st.set_uv(Vector2(0.0, 1.0)); st.add_vertex(p00)
-		st.set_normal(n10); st.set_color(base_col); st.set_uv(Vector2(1.0, 1.0)); st.add_vertex(p10)
-		st.set_normal(n1m); st.set_color(mid_col);  st.set_uv(Vector2(1.0, 0.5)); st.add_vertex(p1m)
-
-		# Сегмент 2 (от середины к кончику побега)
-		st.set_normal(n0m); st.set_color(mid_col);  st.set_uv(Vector2(0.0, 0.5)); st.add_vertex(p0m)
-		st.set_normal(n11); st.set_color(tip_col);  st.set_uv(Vector2(1.0, 0.0)); st.add_vertex(p11)
-		st.set_normal(n01); st.set_color(tip_col);  st.set_uv(Vector2(0.0, 0.0)); st.add_vertex(p01)
-
-		st.set_normal(n0m); st.set_color(mid_col);  st.set_uv(Vector2(0.0, 0.5)); st.add_vertex(p0m)
-		st.set_normal(n1m); st.set_color(mid_col);  st.set_uv(Vector2(1.0, 0.5)); st.add_vertex(p1m)
-		st.set_normal(n11); st.set_color(tip_col);  st.set_uv(Vector2(1.0, 0.0)); st.add_vertex(p11)
-
-
 static func _get_birch_bark_material() -> Material:
 	if _birch_bark_mat != null:
 		return _birch_bark_mat
@@ -598,7 +1029,6 @@ float vnoise(vec2 p) {
 
 void fragment() {
 	float trunk_t = COLOR.r;
-	// Горизонтальные чёрные чечевички русской берёзы + тёмный потрескавшийся комель у корней
 	float lenticels = vnoise(vec2(UV.x * 5.5, UV.y * 42.0));
 	float patches = vnoise(vec2(UV.x * 3.2, UV.y * 6.5));
 	float dark_marks = smoothstep(0.66, 0.78, lenticels) * 0.85 + smoothstep(0.72, 0.86, patches) * 0.65;
@@ -639,7 +1069,6 @@ uniform sampler2D bark_arm : filter_linear_mipmap_anisotropic, repeat_enable;
 void fragment() {
 	float trunk_t = COLOR.r;
 	vec3 base_c = texture(bark_alb, UV * vec2(1.4, 0.9)).rgb;
-	// У сосны нижняя кора тёмно-бурая, а верхняя — золотисто-янтарная
 	vec3 upper_amber = base_c * vec3(1.32, 0.88, 0.56);
 	ALBEDO = mix(base_c * 0.82, upper_amber, smoothstep(0.32, 0.78, trunk_t));
 	NORMAL_MAP = texture(bark_nor, UV * vec2(1.4, 0.9)).rgb;
@@ -659,315 +1088,160 @@ void fragment() {
 static func _get_dark_bark_material() -> Material:
 	if _dark_bark_mat != null:
 		return _dark_bark_mat
-	_dark_bark_mat = AssetCatalog.get_pbr_material("bark_willow_02", Vector3(1.2, 0.9, 1.2), false, Color(0.80, 0.76, 0.70))
+	_dark_bark_mat = AssetCatalog.get_pbr_material("bark_willow_02", Vector3(1.2, 0.9, 1.2), false, Color(0.76, 0.72, 0.66))
 	return _dark_bark_mat
 
 
-## Аналитический ботанический шейдер ветвей, мелкой резной листвы берёз/яблонь и густой хвои
-static func _get_canopy_material(mode: int) -> Material:
-	if mode == 0 and _birch_canopy_mat != null:
-		return _birch_canopy_mat
-	if mode == 1 and _conifer_canopy_mat != null:
-		return _conifer_canopy_mat
-	if mode == 2 and _broadleaf_canopy_mat != null:
-		return _broadleaf_canopy_mat
-
+static func _get_pbr_foliage_shader() -> Shader:
+	if _pbr_foliage_shader != null:
+		return _pbr_foliage_shader
 	var sh := Shader.new()
 	sh.code = """
 shader_type spatial;
 render_mode cull_disabled, diffuse_burley, specular_schlick_ggx;
 
-uniform int foliage_mode = 0; // 0 = берёза повислая, 1 = хвоя сосны/ели, 2 = липа/яблоня
-uniform vec3 leaf_dark : source_color = vec3(0.13, 0.28, 0.07);
-uniform vec3 leaf_bright : source_color = vec3(0.35, 0.46, 0.12);
+uniform sampler2D tex_alb : source_color, filter_linear_mipmap_anisotropic;
+uniform sampler2D tex_alpha : hint_default_white, filter_linear_mipmap_anisotropic;
+uniform sampler2D tex_nor : hint_normal, filter_linear_mipmap_anisotropic;
+
+uniform float use_embedded_rgba = 0.0;
+uniform vec3 color_tint : source_color = vec3(1.0, 1.0, 1.0);
+uniform vec3 warm_var_tint : source_color = vec3(1.14, 1.06, 0.78);
+uniform float alpha_scissor = 0.40;
+uniform float roughness_val = 0.58;
+uniform float backlight_strength = 0.62;
+uniform float sky_normal_blend = 0.42;
+uniform float wind_strength = 1.0;
 
 varying vec3 v_wpos;
-
-float hash21(vec2 p) {
-	p = fract(p * vec2(127.1, 311.7));
-	p += dot(p, p + 34.23);
-	return fract(p.x * p.y);
-}
-
-vec2 hash22(vec2 p) {
-	vec3 p3 = fract(vec3(p.xyx) * vec3(0.1031, 0.1030, 0.0973));
-	p3 += dot(p3, p3.yzx + 33.33);
-	return fract((p3.xx + p3.yz) * p3.zy);
-}
 
 void vertex() {
 	vec3 wp = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
 	v_wpos = wp;
-	float flex = COLOR.g; // 0 у основания ветки, 1 на кончике
-	float gust = sin(TIME * 1.65 + wp.x * 0.14 + wp.z * 0.11);
-	float flutter = sin(TIME * 5.2 + wp.x * 1.9 + wp.y * 2.3 + COLOR.r * 12.0) * 0.032;
-	VERTEX.x += (gust * 0.14 + flutter) * flex;
-	VERTEX.z += (cos(TIME * 1.35 + wp.z * 0.15) * 0.11 + flutter) * flex;
-	VERTEX.y += flutter * 0.5 * flex;
-}
-
-// Форма резного берёзового / яблоневого листика в изотропных координатах lp (x: -0.6..0.6, y: 0..1)
-float single_leaf_mask(vec2 lp, bool is_birch, out float vein, out vec2 nrm_tilt) {
-	vein = 0.0;
-	nrm_tilt = vec2(0.0);
-	if (lp.y < -0.08 || lp.y > 1.0) return 0.0;
-	// Тонкий черешок у основания листика
-	if (lp.y < 0.0) {
-		return (abs(lp.x) < 0.035) ? 1.0 : 0.0;
-	}
-	// Ромбовидно-сердцевидный контур листа берёзы (Betula pendula) или округлый лист яблони/липы
-	float env = is_birch
-		? sin(pow(lp.y, 0.62) * 3.14159265) * (1.0 - 0.32 * lp.y * lp.y)
-		: sin(pow(lp.y, 0.72) * 3.14159265) * (1.0 - 0.15 * lp.y);
-	float width_scale = is_birch ? 0.56 : 0.68;
-	float teeth = (is_birch ? 0.042 : 0.028) * sin(lp.y * 44.0) * smoothstep(0.08, 0.25, lp.y) * (1.0 - lp.y * 0.5);
-	float half_w = max(0.001, env * width_scale + teeth);
-	float ax = abs(lp.x);
-	if (ax > half_w) return 0.0;
-
-	// Центральная и боковые прожилки + лёгкий 3D-изгиб половинок листа от прожилки
-	float center_vein = exp(-ax * 28.0);
-	float side_veins = exp(-abs(sin((lp.y - ax * 0.72) * 26.0)) * 8.5) * 0.40;
-	vein = clamp(center_vein + side_veins, 0.0, 1.0);
-	nrm_tilt = vec2(clamp(lp.x / half_w, -1.0, 1.0) * 0.28, (lp.y - 0.45) * 0.22);
-	return 1.0;
-}
-
-// Расстояние от точки q до развилок деревянной веточки (главный побег + 6 боковых веточек)
-float twig_skeleton_dist(vec2 q, float color_r, out float on_wood) {
-	on_wood = 0.0;
-	float vc = clamp(q.y, 0.0, 0.86);
-	float sx = 0.032 * sin(vc * 5.2 + color_r * 6.28);
-	float d_min = length(q - vec2(sx, vc));
-	float stem_w = mix(0.011, 0.0028, vc);
-	if (q.y >= 0.0 && q.y <= 0.86 && abs(q.x - sx) < stem_w) {
-		on_wood = 1.0;
-	}
-
-	for (int s = 0; s < 6; s++) {
-		float fs = float(s);
-		float sv = 0.10 + fs * 0.125;
-		float side = (s % 2 == 0) ? 1.0 : -1.0;
-		vec2 s_orig = vec2(0.032 * sin(sv * 5.2 + color_r * 6.28), sv);
-		float s_ang = side * mix(0.88, 0.48, fs / 5.0);
-		vec2 s_dir = vec2(sin(s_ang), cos(s_ang));
-		vec2 s_nrm = vec2(s_dir.y, -s_dir.x);
-		vec2 rel = q - s_orig;
-		float along = dot(rel, s_dir);
-		float max_s_len = mix(0.36, 0.16, fs / 5.0);
-		float along_c = clamp(along, 0.0, max_s_len);
-		float droop = -0.05 * (along_c * along_c);
-		float perp_val = dot(rel, s_nrm) - droop;
-		float d_seg = length(vec2(along - along_c, perp_val));
-		d_min = min(d_min, d_seg);
-		if (along > 0.0 && along < max_s_len && abs(perp_val) < mix(0.006, 0.0022, along_c / max_s_len)) {
-			on_wood = 1.0;
-		}
-	}
-	return d_min;
-}
-
-// Слой множества мелких отдельных листьев вдоль веточек (с воздушными просветами неба между листьями!)
-float eval_leaf_grid_layer(
-	vec2 q,
-	float grid_freq,
-	float layer_seed,
-	float color_r,
-	bool is_birch,
-	float density_keep,
-	out float out_vein,
-	out float out_shade,
-	out vec2 out_tilt
-) {
-	out_vein = 0.0;
-	out_shade = 0.5;
-	out_tilt = vec2(0.0);
-
-	vec2 gp = q * grid_freq;
-	vec2 base_cell = floor(gp);
-
-	// Проверяем текущую и соседние ячейки (2x2), чтобы листики не обрезались по границам ячейки
-	vec2 sub = fract(gp) - 0.5;
-	int ox_start = (sub.x < 0.0) ? -1 : 0;
-	int oy_start = (sub.y < 0.0) ? -1 : 0;
-
-	for (int oy = 0; oy <= 1; oy++) {
-		for (int ox = 0; ox <= 1; ox++) {
-			vec2 cid = base_cell + vec2(float(ox_start + ox), float(oy_start + oy));
-			vec2 cell_center_q = (cid + 0.5) / grid_freq;
-			if (cell_center_q.y < 0.07 || cell_center_q.y > 0.95 || abs(cell_center_q.x) > 0.46) {
-				continue;
-			}
-
-			vec2 rnd = hash22(cid + vec2(layer_seed * 17.3, color_r * 31.7));
-			// Пропускаем часть ячеек для ажурности и воздушных просветов между листьями
-			if (rnd.y > density_keep) {
-				continue;
-			}
-
-			// Листья растут только вблизи деревянных веточек (не образуя сплошной зелёный блин!)
-			float dummy_wood = 0.0;
-			float td = twig_skeleton_dist(cell_center_q, color_r, dummy_wood);
-			if (td > 0.076 + rnd.x * 0.018) {
-				continue;
-			}
-
-			vec2 leaf_origin = cell_center_q + (rnd - 0.5) * (0.42 / grid_freq);
-			// Листья ориентированы естественно вдоль боковых побегов с живым разбросом углов
-			float base_ang = clamp(cell_center_q.x * 2.4, -1.15, 1.15) + (rnd.x - 0.5) * 1.10;
-			float cs = cos(base_ang);
-			float sn = sin(base_ang);
-			vec2 d = q - leaf_origin;
-			vec2 rot_d = vec2(d.x * cs - d.y * sn, d.x * sn + d.y * cs);
-
-			// Размер отдельного листика (~7-8 см в мировых координатах), меньше шага сетки, чтобы листья были раздельными!
-			float leaf_len = (is_birch ? 0.78 : 0.86) / grid_freq * mix(0.84, 1.14, rnd.y);
-			vec2 lp = vec2(rot_d.x / leaf_len, rot_d.y / leaf_len + 0.38);
-
-			float v_tmp = 0.0;
-			vec2 tilt_tmp = vec2(0.0);
-			if (single_leaf_mask(lp, is_birch, v_tmp, tilt_tmp) > 0.5) {
-				out_vein = v_tmp;
-				out_shade = fract(rnd.x * 0.63 + rnd.y * 0.37 + cell_center_q.y * 0.25);
-				out_tilt = tilt_tmp;
-				return 1.0;
-			}
-		}
-	}
-	return 0.0;
+	float flex = COLOR.g;
+	float gust = sin(TIME * 1.55 + wp.x * 0.13 + wp.z * 0.10);
+	float flutter = sin(TIME * 4.6 + wp.x * 1.7 + wp.y * 2.1 + COLOR.r * 12.0) * 0.026;
+	VERTEX.x += (gust * 0.12 + flutter) * flex * wind_strength;
+	VERTEX.z += (cos(TIME * 1.28 + wp.z * 0.14) * 0.09 + flutter) * flex * wind_strength;
+	VERTEX.y += flutter * 0.45 * flex * wind_strength;
 }
 
 void fragment() {
-	// Изотропные координаты ветви q: x в [-0.5..+0.5], y в [0..1] (пропорция строго 1:1!)
-	vec2 q = vec2(UV.x - 0.5, 1.0 - UV.y);
-	float v = q.y;
-	float u = q.x * 2.0; // -1..+1 для расчёта скелета веточек
+	vec4 sample_c = texture(tex_alb, UV);
+	float a = (use_embedded_rgba > 0.5) ? sample_c.a : texture(tex_alpha, UV).r;
+	ALPHA = a;
+	ALPHA_SCISSOR_THRESHOLD = alpha_scissor;
 
-	// Сферическая нормаль купола кроны с мягким наклоном к небу (+Y), чтобы обе стороны ветки освещались объёмно и без тёмных граней
 	if (!FRONT_FACING) {
 		NORMAL = -NORMAL;
 	}
 	vec3 sky_up_vs = normalize((VIEW_MATRIX * vec4(0.0, 1.0, 0.0, 0.0)).xyz);
-	NORMAL = normalize(mix(NORMAL, sky_up_vs, 0.45));
-
-	float on_stem = 0.0;
-	float twig_d = twig_skeleton_dist(q, COLOR.r, on_stem);
-
-	float alpha = on_stem;
-	float is_wood = on_stem;
-	float shade_var = 0.5;
-	float vein_val = 0.0;
-	vec2 leaf_tilt = vec2(0.0);
-
-	if (foliage_mode == 1) {
-		// ХВОЙНАЯ ЛАПА СОСНЫ / ЕЛИ: разветвлённые лапы с густыми пучками хвоинок
-		float stem_x = 0.032 * sin(v * 5.2 + COLOR.r * 6.28);
-		for (int i = 0; i < 8; i++) {
-			float fi = float(i);
-			float sv = 0.08 + fi * 0.11;
-			float side = (i % 2 == 0) ? 1.0 : -1.0;
-			vec2 origin = vec2(0.06 * sin(sv * 5.5 + COLOR.r * 6.28), sv);
-			float ang = side * mix(0.95, 0.50, sv);
-			vec2 dir = vec2(sin(ang), cos(ang));
-			vec2 nrm = vec2(dir.y, -dir.x);
-			vec2 rel = vec2(u, v) - origin;
-			float along = dot(rel, dir);
-			float perp = dot(rel, nrm);
-			float max_l = mix(0.78, 0.30, sv);
-			if (along > -0.04 && along < max_l) {
-				if (abs(perp) < 0.012 && along > 0.0) {
-					alpha = 1.0;
-					is_wood = 1.0;
-				}
-				float needle_reach = mix(0.24, 0.10, along / max_l);
-				if (abs(perp) < needle_reach) {
-					float comb = sin((along * 52.0 - abs(perp) * 32.0) + fi * 1.7);
-					if (comb > 0.02) {
-						alpha = 1.0;
-						is_wood = 0.0;
-						shade_var = clamp(along / max_l * 0.7 + abs(perp) * 2.2, 0.0, 1.0);
-						leaf_tilt = vec2(perp * 1.5, (along / max_l - 0.5) * 0.3);
-					}
-				}
-			}
-		}
-		// Верхушечная кисточка хвои
-		vec2 top_rel = vec2(u - stem_x * 2.0, v - 0.84);
-		float tr = length(top_rel);
-		if (tr < 0.26) {
-			float rays = sin(atan(top_rel.x, top_rel.y) * 26.0 + COLOR.r * 9.0);
-			if (rays > 0.05) {
-				alpha = 1.0;
-				is_wood = 0.0;
-				shade_var = 0.85;
-			}
-		}
-	} else {
-		// АЖУРНАЯ БЕРЁЗОВАЯ / ЯБЛОНЕВАЯ ВЕТВЬ: мелкие резные листья вдоль тонких веточек с просветами неба
-		bool is_birch = (foliage_mode == 0);
-		float v1 = 0.0, s1 = 0.5;
-		vec2 t1 = vec2(0.0);
-		if (eval_leaf_grid_layer(q, is_birch ? 10.4 : 8.8, 1.0, COLOR.r, is_birch, 0.82, v1, s1, t1) > 0.5) {
-			alpha = 1.0;
-			is_wood = 0.0;
-			vein_val = v1;
-			shade_var = s1 * 0.85;
-			leaf_tilt = t1;
-		}
-		float v2 = 0.0, s2 = 0.5;
-		vec2 t2 = vec2(0.0);
-		if (eval_leaf_grid_layer(q + vec2(0.045, 0.038), is_birch ? 9.6 : 8.2, 2.0, COLOR.r, is_birch, 0.42, v2, s2, t2) > 0.5) {
-			alpha = 1.0;
-			is_wood = 0.0;
-			vein_val = v2;
-			shade_var = 0.25 + s2 * 0.75;
-			leaf_tilt = t2;
-		}
+	NORMAL = normalize(mix(NORMAL, sky_up_vs, sky_normal_blend));
+	if (use_embedded_rgba < 0.5) {
+		NORMAL_MAP = texture(tex_nor, UV).rgb;
+		NORMAL_MAP_DEPTH = 0.72;
 	}
 
-	ALPHA = alpha;
-	ALPHA_SCISSOR_THRESHOLD = 0.48;
+	float tree_var = smoothstep(0.32, 0.92, sin(v_wpos.x * 0.08 + v_wpos.z * 0.07) * 0.5 + 0.5);
+	vec3 tint = mix(color_tint, color_tint * warm_var_tint, clamp(tree_var * 0.55 + (COLOR.r - 0.5) * 0.24, 0.0, 1.0));
+	vec3 final_col = sample_c.rgb * tint * mix(0.84, 1.06, COLOR.b);
 
-	if (is_wood > 0.5) {
-		ALBEDO = (foliage_mode == 0) ? vec3(0.28, 0.22, 0.17) : vec3(0.24, 0.17, 0.11);
-		ROUGHNESS = 0.88;
-		AO = 0.70;
-		BACKLIGHT = vec3(0.0);
-	} else {
-		// Лёгкая 3D-вариация нормали каждого отдельного листика поверх сферического купола кроны
-		NORMAL = normalize(NORMAL + TANGENT * (leaf_tilt.x * 0.35) + BINORMAL * (leaf_tilt.y * 0.35));
-		float tree_gold = smoothstep(0.62, 0.95, sin(v_wpos.x * 0.09 + v_wpos.z * 0.07) * 0.5 + 0.5);
-		float canopy_ao = mix(0.68, 1.0, COLOR.b);
-		vec3 col = mix(leaf_dark, leaf_bright, shade_var);
-		if (foliage_mode == 0) {
-			col = mix(col, vec3(0.56, 0.49, 0.13), tree_gold * shade_var * 0.45);
-		}
-		col *= (1.0 - vein_val * 0.07) * mix(0.88, 1.05, COLOR.b);
-		ALBEDO = col;
-		AO = canopy_ao;
-		AO_LIGHT_AFFECT = 0.35;
-		ROUGHNESS = (foliage_mode == 1) ? 0.62 : 0.54;
-		SPECULAR = 0.22;
-		BACKLIGHT = col * ((foliage_mode == 1) ? 0.48 : 0.85);
-	}
+	ALBEDO = final_col;
+	AO = mix(0.64, 1.0, COLOR.b);
+	AO_LIGHT_AFFECT = 0.35;
+	ROUGHNESS = roughness_val;
+	SPECULAR = 0.22;
+	BACKLIGHT = final_col * backlight_strength;
 }
 """
+	_pbr_foliage_shader = sh
+	return sh
+
+
+static func _get_canopy_material(species: int) -> Material:
+	match species:
+		TreeSpecies.BIRCH:
+			if _birch_canopy_mat != null:
+				return _birch_canopy_mat
+		TreeSpecies.PINE:
+			if _pine_canopy_mat != null:
+				return _pine_canopy_mat
+		TreeSpecies.SPRUCE:
+			if _spruce_canopy_mat != null:
+				return _spruce_canopy_mat
+		_:
+			if _orchard_canopy_mat != null:
+				return _orchard_canopy_mat
+
 	var sm := ShaderMaterial.new()
-	sm.shader = sh
-	sm.set_shader_parameter("foliage_mode", mode)
-	if mode == 0:
-		sm.set_shader_parameter("leaf_dark", Vector3(0.14, 0.30, 0.07))
-		sm.set_shader_parameter("leaf_bright", Vector3(0.36, 0.48, 0.12))
-		_birch_canopy_mat = sm
-	elif mode == 1:
-		sm.set_shader_parameter("leaf_dark", Vector3(0.06, 0.18, 0.06))
-		sm.set_shader_parameter("leaf_bright", Vector3(0.16, 0.31, 0.10))
-		_conifer_canopy_mat = sm
-	else:
-		sm.set_shader_parameter("leaf_dark", Vector3(0.11, 0.27, 0.07))
-		sm.set_shader_parameter("leaf_bright", Vector3(0.29, 0.43, 0.11))
-		_broadleaf_canopy_mat = sm
+	sm.shader = _get_pbr_foliage_shader()
+
+	match species:
+		TreeSpecies.SPRUCE:
+			_assign_foliage_textures(sm, "fir_twig")
+			sm.set_shader_parameter("use_embedded_rgba", 0.0)
+			sm.set_shader_parameter("color_tint", Color(0.82, 0.92, 0.78))
+			sm.set_shader_parameter("warm_var_tint", Color(1.06, 1.08, 0.88))
+			sm.set_shader_parameter("alpha_scissor", 0.38)
+			sm.set_shader_parameter("roughness_val", 0.64)
+			sm.set_shader_parameter("backlight_strength", 0.42)
+			sm.set_shader_parameter("sky_normal_blend", 0.34)
+			sm.set_shader_parameter("wind_strength", 0.72)
+			_spruce_canopy_mat = sm
+
+		TreeSpecies.PINE:
+			sm.set_shader_parameter("tex_alb", _get_pine_bough_texture())
+			sm.set_shader_parameter("tex_nor", _get_flat_normal_texture())
+			sm.set_shader_parameter("use_embedded_rgba", 1.0)
+			sm.set_shader_parameter("color_tint", Color(0.94, 1.02, 0.86))
+			sm.set_shader_parameter("warm_var_tint", Color(1.10, 1.06, 0.86))
+			sm.set_shader_parameter("alpha_scissor", 0.36)
+			sm.set_shader_parameter("roughness_val", 0.60)
+			sm.set_shader_parameter("backlight_strength", 0.48)
+			sm.set_shader_parameter("sky_normal_blend", 0.40)
+			sm.set_shader_parameter("wind_strength", 0.85)
+			_pine_canopy_mat = sm
+
+		TreeSpecies.BIRCH:
+			sm.set_shader_parameter("tex_alb", _get_birch_spray_texture())
+			sm.set_shader_parameter("tex_nor", _get_flat_normal_texture())
+			sm.set_shader_parameter("use_embedded_rgba", 1.0)
+			sm.set_shader_parameter("color_tint", Color(0.95, 1.04, 0.78))
+			sm.set_shader_parameter("warm_var_tint", Color(1.24, 1.12, 0.68))
+			sm.set_shader_parameter("alpha_scissor", 0.40)
+			sm.set_shader_parameter("roughness_val", 0.54)
+			sm.set_shader_parameter("backlight_strength", 0.78)
+			sm.set_shader_parameter("sky_normal_blend", 0.46)
+			sm.set_shader_parameter("wind_strength", 1.15)
+			_birch_canopy_mat = sm
+
+		_: # ORCHARD
+			sm.set_shader_parameter("tex_alb", _get_orchard_spray_texture())
+			sm.set_shader_parameter("tex_nor", _get_flat_normal_texture())
+			sm.set_shader_parameter("use_embedded_rgba", 1.0)
+			sm.set_shader_parameter("color_tint", Color(0.80, 0.94, 0.74))
+			sm.set_shader_parameter("warm_var_tint", Color(1.10, 1.06, 0.82))
+			sm.set_shader_parameter("alpha_scissor", 0.40)
+			sm.set_shader_parameter("roughness_val", 0.56)
+			sm.set_shader_parameter("backlight_strength", 0.66)
+			sm.set_shader_parameter("sky_normal_blend", 0.44)
+			sm.set_shader_parameter("wind_strength", 0.92)
+			_orchard_canopy_mat = sm
+
 	return sm
+
+
+static func _assign_foliage_textures(sm: ShaderMaterial, tex_folder: String) -> void:
+	var base := "res://assets/downloaded/textures/%s" % tex_folder
+	var alb := AssetCatalog._load_texture_safe("%s/diff.jpg" % base)
+	var alp := AssetCatalog._load_texture_safe("%s/alpha.jpg" % base)
+	var nor := AssetCatalog._load_texture_safe("%s/nor_gl.jpg" % base)
+	if alb != null:
+		sm.set_shader_parameter("tex_alb", alb)
+	if alp != null:
+		sm.set_shader_parameter("tex_alpha", alp)
+	if nor != null:
+		sm.set_shader_parameter("tex_nor", nor)
 
 
 # ============================================================================
@@ -983,7 +1257,6 @@ static func _build_photoscanned_undergrowth(parent: Node3D, rng: RandomNumberGen
 	var ferns := AssetCatalog.get_model_submeshes("res://assets/downloaded/models/fern_02/model.gltf")
 	var grass_ph := AssetCatalog.get_model_submeshes("res://assets/downloaded/models/grass_medium_02/model.gltf")
 
-	# А) Густые кусты для пряток (у заборов, в палисадниках, вдоль кюветов и в лесу — ~650 кустов)
 	var shrub_buckets: Array = [[], [], []]
 	for _i in range(950):
 		var sx := rng.randf_range(-85.0, 85.0)
@@ -1002,20 +1275,18 @@ static func _build_photoscanned_undergrowth(parent: Node3D, rng: RandomNumberGen
 		)
 
 	if not shrub2.is_empty():
-		_add_multimesh_batch(parent, "Shrubs_Large", shrub2[0], shrub_buckets[0], 125.0, true)
+		_add_multimesh_batch(parent, "Shrubs_Large", shrub2[0], shrub_buckets[0], 115.0, true, 36.0)
 	if not shrub3.is_empty():
-		_add_multimesh_batch(parent, "Shrubs_Mid", shrub3[0], shrub_buckets[1], 105.0, false)
+		_add_multimesh_batch(parent, "Shrubs_Mid", shrub3[0], shrub_buckets[1], 95.0, false, 36.0)
 	if not shrub4.is_empty():
-		_add_multimesh_batch(parent, "Shrubs_Low", shrub4[0], shrub_buckets[2], 95.0, false)
+		_add_multimesh_batch(parent, "Shrubs_Low", shrub4[0], shrub_buckets[2], 85.0, false, 36.0)
 
-	# Б) Заросли высокой жгучей крапивы и чистотела вдоль деревенских заборов, сараев и придорожных канав!
 	var nettle_xf: Array[Transform3D] = []
 	var celandine_xf: Array[Transform3D] = []
 	for plot in TerrainBuilder.HOUSE_PLOTS:
 		var c: Vector2 = plot["pos"]
 		for _k in range(135):
 			var offset := Vector2(rng.randf_range(-11.5, 11.5), rng.randf_range(-11.5, 11.5))
-			# Сгущаем у заборов и за сараями
 			if absf(offset.x) < 6.2 and absf(offset.y) < 5.5:
 				continue
 			var np := c + offset
@@ -1025,13 +1296,12 @@ static func _build_photoscanned_undergrowth(parent: Node3D, rng: RandomNumberGen
 				continue
 			var ny := TerrainBuilder.get_height(np.x, np.y)
 			if rng.randf() < 0.58:
-				var nsc := rng.randf_range(3.8, 5.8) # Крапива 0.85..1.25 м высотой!
+				var nsc := rng.randf_range(3.8, 5.8)
 				nettle_xf.append(Transform3D(Basis(Vector3.UP, rng.randf() * TAU).scaled(Vector3(nsc, nsc, nsc)), Vector3(np.x, ny, np.y)))
 			else:
 				var csc := rng.randf_range(2.2, 3.4)
 				celandine_xf.append(Transform3D(Basis(Vector3.UP, rng.randf() * TAU).scaled(Vector3(csc, csc, csc)), Vector3(np.x, ny, np.y)))
 
-	# Добавляем крапиву вдоль кюветов просёлочной дороги
 	for i in range(420):
 		var dz := rng.randf_range(-84.0, 84.0)
 		var side := -1.0 if (i % 2 == 0) else 1.0
@@ -1043,13 +1313,11 @@ static func _build_photoscanned_undergrowth(parent: Node3D, rng: RandomNumberGen
 		nettle_xf.append(Transform3D(Basis(Vector3.UP, rng.randf() * TAU).scaled(Vector3(nsc2, nsc2, nsc2)), Vector3(dx, dy, dz)))
 
 	if not nettles.is_empty() and not nettle_xf.is_empty():
-		# Берём высокий вариант крапивы (индекс 4 — nettle_plant_tall_a_LOD0)
 		var tall_nettle: Mesh = nettles[mini(4, nettles.size() - 1)]
-		_add_multimesh_batch(parent, "PhotoscannedNettles", tall_nettle, nettle_xf, 72.0, false)
+		_add_multimesh_batch(parent, "PhotoscannedNettles", tall_nettle, nettle_xf, 68.0, false, 34.0)
 	if not celandines.is_empty() and not celandine_xf.is_empty():
-		_add_multimesh_batch(parent, "PhotoscannedCelandine", celandines[0], celandine_xf, 68.0, false)
+		_add_multimesh_batch(parent, "PhotoscannedCelandine", celandines[0], celandine_xf, 64.0, false, 34.0)
 
-	# В) Ковёр лесных папоротников вдоль лесной тропинки и под елями (~1 700 кустов)
 	var fern_xf: Array[Transform3D] = []
 	for _i in range(2100):
 		var fx := rng.randf_range(10.0, 86.0)
@@ -1063,9 +1331,8 @@ static func _build_photoscanned_undergrowth(parent: Node3D, rng: RandomNumberGen
 		fern_xf.append(Transform3D(Basis(Vector3.UP, rng.randf() * TAU).scaled(Vector3(fsc, fsc, fsc)), Vector3(fx, fy, fz)))
 
 	if not ferns.is_empty() and not fern_xf.is_empty():
-		_add_multimesh_batch(parent, "PhotoscannedFerns", ferns[0], fern_xf, 80.0, false)
+		_add_multimesh_batch(parent, "PhotoscannedFerns", ferns[0], fern_xf, 74.0, false, 34.0)
 
-	# Г) Фотосканированные кочки травы вдоль всех тропинок и обочин (~3 200 шт.)
 	var ph_grass_xf: Array[Transform3D] = []
 	for _i in range(3400):
 		var gx := rng.randf_range(-84.0, 84.0)
@@ -1079,7 +1346,7 @@ static func _build_photoscanned_undergrowth(parent: Node3D, rng: RandomNumberGen
 		ph_grass_xf.append(Transform3D(Basis(Vector3.UP, rng.randf() * TAU).scaled(Vector3(gsc, gsc, gsc)), Vector3(gx, gy, gz)))
 
 	if not grass_ph.is_empty() and not ph_grass_xf.is_empty():
-		_add_multimesh_batch(parent, "PhotoscannedGrassClumps", grass_ph[grass_ph.size() - 1], ph_grass_xf, 66.0, false)
+		_add_multimesh_batch(parent, "PhotoscannedGrassClumps", grass_ph[grass_ph.size() - 1], ph_grass_xf, 62.0, false, 34.0)
 
 
 # ============================================================================
@@ -1088,10 +1355,7 @@ static func _build_photoscanned_undergrowth(parent: Node3D, rng: RandomNumberGen
 
 static func _build_gpu_meadow_grass(parent: Node3D, rng: RandomNumberGenerator) -> void:
 	var tuft_mesh := _create_curved_grass_tuft_mesh()
-
-	# Разбиваем карту 180×180 м на 4 квадранта по ~14 000 кустов (всего ~56 000 кустов = ~450 000 изогнутых травинок!),
-	# чтобы Frustum Culling и Distance Fade на GPU отсекали невидимые квадранты мгновенно.
-	var quadrants: Array = [[], [], [], []]
+	var grass_xforms: Array[Transform3D] = []
 
 	for _i in range(68000):
 		var gx := rng.randf_range(-86.5, 86.5)
@@ -1102,28 +1366,20 @@ static func _build_gpu_meadow_grass(parent: Node3D, rng: RandomNumberGenerator) 
 			continue
 		if TerrainBuilder.is_inside_building_footprint(gx, gz, 0.35):
 			continue
-		# В глубоком тёмном ельнике трава реже (там преобладает хвоя и папоротник)
 		if weights.b > 0.72 and rng.randf() < 0.62:
 			continue
 
 		var gy := TerrainBuilder.get_height(gx, gz)
-		# Островками делаем высокий некошеный бурьян (до 0.95..1.25 м!), в котором легко спрятаться присев на Ctrl!
 		var wild_patch := sin(gx * 0.13 + 1.1) * cos(gz * 0.15 - 0.6)
 		var h_scale := rng.randf_range(0.85, 1.55) if (wild_patch > 0.25) else rng.randf_range(0.48, 0.92)
 		var w_scale := rng.randf_range(0.75, 1.20)
 
-		var xf := Transform3D(
+		grass_xforms.append(Transform3D(
 			Basis(Vector3.UP, rng.randf() * TAU).scaled(Vector3(w_scale, h_scale, w_scale)),
 			Vector3(gx, gy - 0.02, gz)
-		)
-		var q_idx := (0 if gx < 0.0 else 1) + (0 if gz < 0.0 else 2)
-		(quadrants[q_idx] as Array).append(xf)
+		))
 
-	for q in range(4):
-		var list_q: Array = quadrants[q]
-		if list_q.is_empty():
-			continue
-		_add_multimesh_batch(parent, "MeadowGrass_Q%d" % q, tuft_mesh, list_q, 78.0, false)
+	_add_multimesh_batch(parent, "MeadowGrass", tuft_mesh, grass_xforms, 66.0, false, 30.0)
 
 
 static func _create_curved_grass_tuft_mesh() -> ArrayMesh:
@@ -1132,7 +1388,7 @@ static func _create_curved_grass_tuft_mesh() -> ArrayMesh:
 
 	var rng := RandomNumberGenerator.new()
 	rng.seed = 8082026
-	var blade_count := 8
+	var blade_count := 7
 
 	for b in range(blade_count):
 		var yaw := float(b) * (TAU / float(blade_count)) + rng.randf_range(-0.25, 0.25)
@@ -1143,8 +1399,8 @@ static func _create_curved_grass_tuft_mesh() -> ArrayMesh:
 
 		var h := rng.randf_range(0.62, 0.92)
 		var droop := rng.randf_range(0.16, 0.34)
-		var w0 := 0.026
-		var w1 := 0.018
+		var w0 := 0.027
+		var w1 := 0.019
 		var w2 := 0.009
 
 		var p0 := base
@@ -1155,7 +1411,6 @@ static func _create_curved_grass_tuft_mesh() -> ArrayMesh:
 		var nrm := (Vector3.UP * 0.82 - dir * 0.18).normalized()
 		var seed_r := rng.randf()
 
-		# 3 изогнутых сегмента на каждую травинку с острым кончиком
 		var c0 := Color(seed_r, 0.0, 0.0, 1.0)
 		var c1 := Color(seed_r, 0.42, 0.0, 1.0)
 		var c2 := Color(seed_r, 0.76, 0.0, 1.0)
@@ -1206,7 +1461,6 @@ void vertex() {
 	v_seed = COLOR.r;
 	v_patch = sin(wp.x * 0.075 + 0.5) * cos(wp.z * 0.082 - 0.3) * 0.5 + 0.5;
 
-	// Волны августовского ветра по полю
 	float wave = sin(TIME * 2.05 + wp.x * 0.22 + wp.z * 0.16) + 0.45 * cos(TIME * 3.4 - wp.x * 0.35 + v_seed * 6.28);
 	float bend = v_height * v_height;
 	VERTEX.x += wave * 0.15 * bend;
@@ -1217,7 +1471,6 @@ void vertex() {
 void fragment() {
 	vec3 root_col = vec3(0.07, 0.14, 0.04);
 	vec3 mid_green = mix(vec3(0.16, 0.31, 0.08), vec3(0.26, 0.35, 0.10), v_patch);
-	// Подсохшие золотистые августовские колоски на кончиках травы
 	vec3 tip_gold = mix(vec3(0.34, 0.44, 0.13), vec3(0.62, 0.53, 0.20), smoothstep(0.35, 0.85, v_patch + (v_seed - 0.5) * 0.35));
 
 	vec3 col = mix(root_col, mid_green, smoothstep(0.0, 0.45, v_height));
@@ -1236,11 +1489,58 @@ void fragment() {
 	return sm
 
 
+# ============================================================================
+# ПРОСТРАНСТВЕННОЕ РАЗБИЕНИЕ MULTIMESH ПО ЧАНКАМ (ДЛЯ FRUSTUM & DISTANCE CULLING)
+# ============================================================================
+
 static func _add_multimesh_batch(
 	parent: Node3D,
 	batch_name: String,
 	mesh: Mesh,
 	xforms: Array,
+	vis_end: float,
+	cast_shadows: bool,
+	cell_size: float = 36.0
+) -> void:
+	if xforms.is_empty() or mesh == null:
+		return
+
+	if xforms.size() <= 20 or cell_size <= 0.0:
+		_spawn_single_multimesh_node(parent, batch_name, mesh, xforms, Vector3.ZERO, vis_end, cast_shadows)
+		return
+
+	var buckets: Dictionary = {}
+	for i in range(xforms.size()):
+		var xf: Transform3D = xforms[i]
+		var cx := int(floor((xf.origin.x + 120.0) / cell_size))
+		var cz := int(floor((xf.origin.z + 120.0) / cell_size))
+		var key := Vector2i(cx, cz)
+		if not buckets.has(key):
+			buckets[key] = []
+		(buckets[key] as Array).append(xf)
+
+	var group := Node3D.new()
+	group.name = batch_name
+	parent.add_child(group)
+
+	for key in buckets.keys():
+		var cell_list: Array = buckets[key]
+		if cell_list.is_empty():
+			continue
+		var sum_pos := Vector3.ZERO
+		for cxf in cell_list:
+			sum_pos += (cxf as Transform3D).origin
+		var center := sum_pos / float(cell_list.size())
+		var cname := "%s_C%d_%d" % [batch_name, key.x, key.y]
+		_spawn_single_multimesh_node(group, cname, mesh, cell_list, center, vis_end, cast_shadows)
+
+
+static func _spawn_single_multimesh_node(
+	parent: Node3D,
+	node_name: String,
+	mesh: Mesh,
+	xforms: Array,
+	local_origin: Vector3,
 	vis_end: float,
 	cast_shadows: bool
 ) -> void:
@@ -1249,13 +1549,16 @@ static func _add_multimesh_batch(
 	mm.mesh = mesh
 	mm.instance_count = xforms.size()
 	for i in range(xforms.size()):
-		mm.set_instance_transform(i, xforms[i])
+		var xf: Transform3D = xforms[i]
+		mm.set_instance_transform(i, Transform3D(xf.basis, xf.origin - local_origin))
 
 	var mmi := MultiMeshInstance3D.new()
-	mmi.name = batch_name
+	mmi.name = node_name
+	mmi.position = local_origin
 	mmi.multimesh = mm
-	mmi.visibility_range_end = vis_end
-	mmi.visibility_range_end_margin = 10.0
-	mmi.visibility_range_fade_mode = GeometryInstance3D.VISIBILITY_RANGE_FADE_SELF
+	if vis_end < 220.0:
+		mmi.visibility_range_end = vis_end
+		mmi.visibility_range_end_margin = 12.0
+		mmi.visibility_range_fade_mode = GeometryInstance3D.VISIBILITY_RANGE_FADE_SELF
 	mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON if cast_shadows else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	parent.add_child(mmi)

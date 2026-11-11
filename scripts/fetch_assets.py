@@ -20,19 +20,21 @@ from __future__ import annotations
 
 import argparse
 import concurrent.futures
+import io
 import json
 import os
 import sys
 import time
 import urllib.error
 import urllib.request
+import zipfile
 from pathlib import Path
 
-USER_AGENT = "DvorSandboxAssetFetcher/2.0 (Godot4 Forward+)"
+USER_AGENT = "DvorSandboxAssetFetcher/3.0 (Godot4 Forward+)"
 ROOT_DIR = Path(__file__).resolve().parent.parent
 OUT_DIR = ROOT_DIR / "assets" / "downloaded"
 
-ASSET_PACK_VERSION = 2
+ASSET_PACK_VERSION = 3
 
 # Реальное предзакатное летнее небо над просёлочной дорогой в Европе (Poly Haven CC0)
 HDRI_ID = "evening_road_01_puresky"
@@ -115,6 +117,25 @@ WEAPON_GLBS = {
     "Axe.glb": f"{QUATERNIUS_BASE}/medieval_weapons_pack/Axe.glb",
 }
 
+# Реальные фотосканированные PBR-атласы хвойных лап ели и побегов сосны (Poly Haven CC0, только лёгкие текстуры без 500 МБ мешей)
+POLYHAVEN_TWIG_SETS = {
+    "fir_twig": "fir_tree_01",
+    "pine_twig": "pine_tree_01",
+}
+
+# Реальные фотосканированные PBR-веточки и резные листья европейских лиственных деревьев (ambientCG CC0)
+AMBIENTCG_ZIP_SETS = {
+    "leaf_twig": {
+        "asset_id": "LeafSet005",
+        "files": {
+            "_Color.jpg": "diff.jpg",
+            "_Opacity.jpg": "alpha.jpg",
+            "_NormalGL.jpg": "nor_gl.jpg",
+            "_Roughness.jpg": "rough.jpg",
+        },
+    },
+}
+
 
 def fetch_json(url: str, retries: int = 3) -> dict:
     for attempt in range(retries):
@@ -157,18 +178,60 @@ def download_file(url: str, dest: Path, force: bool = False, retries: int = 3) -
     return (str(dest), 0, False)
 
 
+def download_and_extract_ambientcg(
+    local_id: str, spec: dict, quality: str, force: bool = False, retries: int = 3
+) -> tuple[str, int, bool]:
+    dest_dir = OUT_DIR / "textures" / local_id
+    files_map: dict[str, str] = spec["files"]
+    expected_paths = [dest_dir / local_name for local_name in files_map.values()]
+    if not force and all(p.exists() and p.stat().st_size > 0 for p in expected_paths):
+        total_cached = sum(p.stat().st_size for p in expected_paths)
+        return (str(dest_dir.relative_to(ROOT_DIR)), total_cached, True)
+
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    res_tag = "1K-JPG" if quality == "1k" else "2K-JPG"
+    asset_id = spec["asset_id"]
+    url = f"https://ambientcg.com/get?file={asset_id}_{res_tag}.zip"
+
+    for attempt in range(retries):
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+            with urllib.request.urlopen(req, timeout=120) as resp:
+                zip_bytes = resp.read()
+            extracted_total = 0
+            with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
+                names = zf.namelist()
+                for suffix, local_name in files_map.items():
+                    matched = [n for n in names if n.endswith(suffix)]
+                    if not matched:
+                        raise RuntimeError(f"Missing {suffix} inside {url}")
+                    raw = zf.read(matched[0])
+                    out_file = dest_dir / local_name
+                    tmp_file = out_file.with_suffix(out_file.suffix + ".part")
+                    with open(tmp_file, "wb") as f:
+                        f.write(raw)
+                    os.replace(tmp_file, out_file)
+                    extracted_total += len(raw)
+            return (str(dest_dir.relative_to(ROOT_DIR)), extracted_total, False)
+        except Exception as exc:
+            if attempt == retries - 1:
+                raise RuntimeError(f"Failed to download/extract {url}: {exc}") from exc
+            time.sleep(1.5 * (attempt + 1))
+    return (str(dest_dir), 0, False)
+
+
 def build_download_plan(quality: str) -> tuple[list[tuple[str, Path]], set[Path]]:
     tasks: list[tuple[str, Path]] = []
     force_paths: set[Path] = set()
 
-    print(f"[1/4] Fetching HDRI metadata ({HDRI_ID}, {quality})...")
+    print(f"[1/5] Fetching HDRI metadata ({HDRI_ID}, {quality})...")
     hdri_meta = fetch_json(f"https://api.polyhaven.com/files/{HDRI_ID}")
     hdri_res = quality if quality in hdri_meta["hdri"] else "1k"
     hdri_url = hdri_meta["hdri"][hdri_res]["hdr"]["url"]
     sky_dest = OUT_DIR / "hdri" / "sky.hdr"
     tasks.append((hdri_url, sky_dest))
 
-    print(f"[2/4] Fetching PBR texture metadata ({len(PBR_TEXTURES)} sets, {quality})...")
+    print(f"[2/5] Fetching PBR texture metadata ({len(PBR_TEXTURES)} sets, {quality})...")
     map_mapping = {
         "Diffuse": "diff.jpg",
         "nor_gl": "nor_gl.jpg",
@@ -194,7 +257,34 @@ def build_download_plan(quality: str) -> tuple[list[tuple[str, Path]], set[Path]
                 out_name = local_name.replace(".jpg", f".{first_fmt}")
             tasks.append((url, OUT_DIR / "textures" / tex_id / out_name))
 
-    print(f"[3/4] Fetching Poly Haven 3D photoscan metadata ({len(POLYHAVEN_MODELS)} models, {quality})...")
+    print(f"[3/5] Fetching photoscanned tree bough & needle atlases ({len(POLYHAVEN_TWIG_SETS)} sets, {quality})...")
+    twig_mapping = {
+        "twig_diff": "diff.jpg",
+        "twig_alpha": "alpha.jpg",
+        "twig_nor_gl": "nor_gl.jpg",
+        "twig_arm": "arm.jpg",
+    }
+    for local_id, ph_model_id in POLYHAVEN_TWIG_SETS.items():
+        tmeta = fetch_json(f"https://api.polyhaven.com/files/{ph_model_id}")
+        for ph_key, local_name in twig_mapping.items():
+            if ph_key not in tmeta:
+                continue
+            res_dict = tmeta[ph_key]
+            chosen_res = quality if quality in res_dict else "1k"
+            fmt_dict = res_dict[chosen_res]
+            if "jpg" in fmt_dict:
+                url = fmt_dict["jpg"]["url"]
+                out_name = local_name
+            elif "png" in fmt_dict:
+                url = fmt_dict["png"]["url"]
+                out_name = local_name.replace(".jpg", ".png")
+            else:
+                first_fmt = next(iter(fmt_dict.keys()))
+                url = fmt_dict[first_fmt]["url"]
+                out_name = local_name.replace(".jpg", f".{first_fmt}")
+            tasks.append((url, OUT_DIR / "textures" / local_id / out_name))
+
+    print(f"[4/5] Fetching Poly Haven 3D photoscan metadata ({len(POLYHAVEN_MODELS)} models, {quality})...")
     for model_id in POLYHAVEN_MODELS:
         mmeta = fetch_json(f"https://api.polyhaven.com/files/{model_id}")
         gltf_res = quality if quality in mmeta["gltf"] else "1k"
@@ -212,7 +302,7 @@ def build_download_plan(quality: str) -> tuple[list[tuple[str, Path]], set[Path]
             elif "png" in alpha_fmts:
                 tasks.append((alpha_fmts["png"]["url"], model_dir / "textures" / "alpha.png"))
 
-    print("[4/4] Adding rigged characters and melee weapons (CC0)...")
+    print("[5/5] Adding rigged characters and melee weapons (CC0)...")
     for fname, url in CHARACTER_GLBS.items():
         tasks.append((url, OUT_DIR / "characters" / fname))
     for fname, url in WEAPON_GLBS.items():
@@ -261,18 +351,21 @@ def main() -> int:
             pass
 
     tasks, _ = build_download_plan(args.quality)
-    total = len(tasks)
-    print(f"Total files in download plan: {total} (profile: {args.quality})")
+    total = len(tasks) + len(AMBIENTCG_ZIP_SETS)
+    print(f"Total tasks in download plan: {total} (profile: {args.quality})")
 
     downloaded_bytes = 0
     completed = 0
     errors: list[str] = []
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=6) as pool:
-        future_map = {
-            pool.submit(download_file, url, dest, force): (url, dest)
+        future_map: dict[concurrent.futures.Future, str] = {
+            pool.submit(download_file, url, dest, force): str(dest)
             for url, dest in tasks
         }
+        for local_id, spec in AMBIENTCG_ZIP_SETS.items():
+            future_map[pool.submit(download_and_extract_ambientcg, local_id, spec, args.quality, force)] = local_id
+
         for fut in concurrent.futures.as_completed(future_map):
             completed += 1
             try:
@@ -296,6 +389,7 @@ def main() -> int:
         "total_size_mb": round(downloaded_bytes / (1024 * 1024), 2),
         "licenses": {
             "Poly Haven (HDRI, PBR Textures, 3D Models)": "CC0 1.0 Public Domain (https://polyhaven.com/license)",
+            "ambientCG (LeafSet005 Foliage PBR)": "CC0 1.0 Public Domain (https://ambientcg.com)",
             "KayKit Character Pack Adventures": "CC0 1.0 Public Domain by Kay Lousberg (https://kaylousberg.com)",
             "Quaternius Medieval Weapons": "CC0 1.0 Public Domain by Quaternius (https://quaternius.com)",
         },

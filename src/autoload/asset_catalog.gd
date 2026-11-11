@@ -319,18 +319,18 @@ func _build_bush_cluster_mesh(stems: Array[Mesh], res_path: String) -> ArrayMesh
 				break
 
 	var is_small_herb := ("/shrub_03/" in res_path or "/shrub_04/" in res_path)
-	var stem_count := 9 if is_small_herb else 6
-	var base_scale := 2.35 if "/shrub_03/" in res_path else (2.65 if "/shrub_04/" in res_path else 1.0)
-	var spread_r := 0.22 if is_small_herb else 0.18
+	var stem_count := 3 if is_small_herb else 2
+	var base_scale := 2.65 if "/shrub_03/" in res_path else (2.95 if "/shrub_04/" in res_path else 1.18)
+	var spread_r := 0.16 if is_small_herb else 0.11
 
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
 	for i in range(stem_count):
 		var src: Mesh = stems[i % stems.size()]
 		if src == null or src.get_surface_count() == 0:
 			continue
-		var yaw := float(i) * (TAU / float(stem_count)) + float(i % 2) * 0.28
-		var tilt := deg_to_rad(10.0 + float(i % 3) * 6.0)
-		var sc := base_scale * (0.88 + float(i % 3) * 0.11)
+		var yaw := float(i) * (TAU / float(stem_count)) + (0.42 if not is_small_herb and i == 1 else float(i % 2) * 0.24)
+		var tilt := deg_to_rad(9.0 + float(i % 3) * 5.0)
+		var sc := base_scale * (0.94 + float(i % 3) * 0.08)
 		var b := (Basis(Vector3.UP, yaw) * Basis(Vector3.RIGHT, tilt)).scaled(Vector3(sc, sc, sc))
 		var offset := Vector3(cos(yaw) * spread_r, 0.0, sin(yaw) * spread_r)
 		for s in range(src.get_surface_count()):
@@ -445,9 +445,9 @@ func _load_scene_safe(res_path: String) -> PackedScene:
 func _upgrade_scene_alpha_materials(res_path: String, ps: PackedScene) -> PackedScene:
 	var model_dir := res_path.get_base_dir()
 	var alpha_path := "%s/textures/alpha.jpg" % model_dir
-	if not FileAccess.file_exists(ProjectSettings.globalize_path(alpha_path)):
+	if not ResourceLoader.exists(alpha_path) and not FileAccess.file_exists(ProjectSettings.globalize_path(alpha_path)):
 		alpha_path = "%s/textures/alpha.png" % model_dir
-		if not FileAccess.file_exists(ProjectSettings.globalize_path(alpha_path)):
+		if not ResourceLoader.exists(alpha_path) and not FileAccess.file_exists(ProjectSettings.globalize_path(alpha_path)):
 			return ps
 
 	var inst := ps.instantiate()
@@ -504,6 +504,6 @@ func _find_model_texture(model_dir: String, model_id: String, map_suffix: String
 	for res_tag in ["4k", "2k", "1k"]:
 		for ext in ["jpg", "png"]:
 			var candidate := "%s/textures/%s_%s_%s.%s" % [model_dir, model_id, map_suffix, res_tag, ext]
-			if FileAccess.file_exists(ProjectSettings.globalize_path(candidate)):
+			if ResourceLoader.exists(candidate) or FileAccess.file_exists(ProjectSettings.globalize_path(candidate)):
 				return _load_texture_safe(candidate)
 	return null

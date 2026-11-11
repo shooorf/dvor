@@ -181,6 +181,9 @@ static func _build_enterable_village_house(
 	plight.light_color = Color(1.0, 0.74, 0.40)
 	plight.light_energy = 1.45
 	plight.omni_range = 8.5
+	plight.distance_fade_enabled = true
+	plight.distance_fade_begin = 38.0
+	plight.distance_fade_length = 14.0
 	plight.position = Vector3(porch_x - 0.65, floor_y + 1.95, d * 0.5 + 0.35)
 	h_root.add_child(plight)
 
@@ -197,6 +200,9 @@ static func _build_enterable_village_house(
 		ilight.light_color = Color(1.0, 0.70, 0.34)
 		ilight.light_energy = 1.25
 		ilight.omni_range = 7.0
+		ilight.distance_fade_enabled = true
+		ilight.distance_fade_begin = 34.0
+		ilight.distance_fade_length = 12.0
 		ilight.position = Vector3(-2.0, floor_y + 1.65, -0.9)
 		h_root.add_child(ilight)
 
@@ -257,6 +263,9 @@ static func _build_forester_cabin(parent: Node3D, world_pos: Vector3, yaw: float
 	fl.light_color = Color(1.0, 0.68, 0.30)
 	fl.light_energy = 1.8
 	fl.omni_range = 10.0
+	fl.distance_fade_enabled = true
+	fl.distance_fade_begin = 40.0
+	fl.distance_fade_length = 14.0
 	fl.position = Vector3(1.1, floor_y + 1.8, d * 0.5 + 0.32)
 	h_root.add_child(fl)
 
@@ -628,6 +637,9 @@ static func _build_power_line_and_streetlamps(parent: Node3D) -> void:
 				rlight.light_energy = 2.0
 				rlight.omni_range = 15.5
 				rlight.omni_attenuation = 1.25
+				rlight.distance_fade_enabled = true
+				rlight.distance_fade_begin = 58.0
+				rlight.distance_fade_length = 18.0
 				rlight.position = Vector3(px - 1.15, py + 3.75, pz + 0.35)
 				net.add_child(rlight)
 
@@ -767,11 +779,11 @@ static func _build_airtight_outer_perimeter(parent: Node3D, rng: RandomNumberGen
 				perim_log_xf.append(Transform3D(Basis(Vector3.UP, tang_yaw).scaled(Vector3(lsc, lsc * 1.4, lsc * 1.4)), Vector3(wx - out_dir.x * 0.35, wy + 0.05, wz - out_dir.y * 0.35)))
 
 	if not shrub_meshes.is_empty() and not perim_shrub_xf.is_empty():
-		RealisticFoliage._add_multimesh_batch(perim, "PerimeterThicketShrubs", shrub_meshes[0], perim_shrub_xf, 165.0, true)
+		RealisticFoliage._add_multimesh_batch(perim, "PerimeterThicketShrubs", shrub_meshes[0], perim_shrub_xf, 145.0, false)
 	if not boulder_meshes.is_empty() and not perim_rock_xf.is_empty():
-		RealisticFoliage._add_multimesh_batch(perim, "PerimeterBoulders", boulder_meshes[0], perim_rock_xf, 150.0, true)
+		RealisticFoliage._add_multimesh_batch(perim, "PerimeterBoulders", boulder_meshes[0], perim_rock_xf, 145.0, true)
 	if not log_meshes.is_empty() and not perim_log_xf.is_empty():
-		RealisticFoliage._add_multimesh_batch(perim, "PerimeterWindfallLogs", log_meshes[0], perim_log_xf, 140.0, true)
+		RealisticFoliage._add_multimesh_batch(perim, "PerimeterWindfallLogs", log_meshes[0], perim_log_xf, 135.0, false)
 
 
 # ============================================================================

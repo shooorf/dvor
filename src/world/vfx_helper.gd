@@ -349,6 +349,10 @@ static func attach_fire_effect(target: Node3D, light_energy: float = 2.9, omni_r
 	light.omni_range = omni_range
 	light.omni_attenuation = 1.35
 	light.shadow_enabled = true
+	light.distance_fade_enabled = true
+	light.distance_fade_begin = 34.0
+	light.distance_fade_shadow = 26.0
+	light.distance_fade_length = 14.0
 	light.position = Vector3(0.0, 0.65 * particle_scale, 0.0)
 	target.add_child(light)
 
