@@ -11,7 +11,7 @@ $GodotTag = "4.7.2-stable"
 $TemplateVerDirName = "4.7.2.stable"
 $GodotConsole = Join-Path $RootDir ".engine\Godot_v$GodotTag`_win64_console.exe"
 $ManifestPath = Join-Path $RootDir "assets\downloaded\manifest.json"
-$ExpectedPackVersion = 3
+$ExpectedPackVersion = 4
 
 $NeedSetup = (-not (Test-Path $GodotConsole)) -or (-not (Test-Path $ManifestPath))
 if (-not $NeedSetup) {
@@ -75,13 +75,6 @@ if ($LASTEXITCODE -ne 0 -or (-not (Test-Path $OutExe))) {
     throw "Export failed! Check console errors above."
 }
 
-$ZipOut = Join-Path $DistDir "ArenaSandbox_Win64.zip"
-if (Test-Path $ZipOut) {
-    Remove-Item $ZipOut -Force
-}
-Write-Host "Creating shareable archive for friends: $ZipOut ..." -ForegroundColor Cyan
-Compress-Archive -Path "$GameSubDir\*" -DestinationPath $ZipOut -Force
-
 Write-Host "`nBUILD SUCCESSFUL!" -ForegroundColor Green
-Write-Host "  Run locally : $OutExe"
-Write-Host "  Send friends: $ZipOut"
+Write-Host "  Output folder: $GameSubDir"
+Write-Host "  Executable   : $OutExe"

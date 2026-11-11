@@ -83,22 +83,28 @@ func _build_3d_backdrop() -> void:
 	ground.position = Vector3(0.0, -0.52, -6.0)
 	add_child(ground)
 
-	# Фоновые берёзы, сосна, деревянная лавочка и фотосканированный кустарник
+	# Фоновые деревья (берёза, дуб, клён, ель), 3D-ельник, деревянная лавочка и фотосканированный луг
 	if DisplayServer.get_name() != "headless":
 		var birch_mesh := RealisticFoliage._generate_tree_mesh(RealisticFoliage.TreeSpecies.BIRCH, 77)
-		for b_pos in [Vector3(-4.2, -0.32, -5.4), Vector3(4.8, -0.32, -6.8)]:
-			var bmi := MeshInstance3D.new()
-			bmi.mesh = birch_mesh
-			bmi.position = b_pos
-			bmi.scale = Vector3(0.82, 0.82, 0.82)
-			add_child(bmi)
+		var bmi := MeshInstance3D.new()
+		bmi.mesh = birch_mesh
+		bmi.position = Vector3(-4.2, -0.32, -5.4)
+		bmi.scale = Vector3(0.82, 0.82, 0.82)
+		add_child(bmi)
 
-		var pine_mesh := RealisticFoliage._generate_tree_mesh(RealisticFoliage.TreeSpecies.PINE, 88)
-		var pmi := MeshInstance3D.new()
-		pmi.mesh = pine_mesh
-		pmi.position = Vector3(1.1, -0.32, -9.2)
-		pmi.scale = Vector3(0.86, 0.86, 0.86)
-		add_child(pmi)
+		var maple_mesh := RealisticFoliage._generate_tree_mesh(RealisticFoliage.TreeSpecies.MAPLE, 514)
+		var mmi := MeshInstance3D.new()
+		mmi.mesh = maple_mesh
+		mmi.position = Vector3(4.6, -0.32, -6.5)
+		mmi.scale = Vector3(0.84, 0.84, 0.84)
+		add_child(mmi)
+
+		var oak_mesh := RealisticFoliage._generate_tree_mesh(RealisticFoliage.TreeSpecies.OAK, 412)
+		var omi := MeshInstance3D.new()
+		omi.mesh = oak_mesh
+		omi.position = Vector3(1.6, -0.32, -10.4)
+		omi.scale = Vector3(0.80, 0.80, 0.80)
+		add_child(omi)
 
 		var spruce_mesh := RealisticFoliage._generate_tree_mesh(RealisticFoliage.TreeSpecies.SPRUCE, 99)
 		var smi := MeshInstance3D.new()
@@ -107,29 +113,69 @@ func _build_3d_backdrop() -> void:
 		smi.scale = Vector3(0.78, 0.78, 0.78)
 		add_child(smi)
 
+	var fir_sap := AssetCatalog.instantiate_single_variant("res://assets/downloaded/models/fir_sapling/model.gltf", 0)
+	if fir_sap != null:
+		fir_sap.position = Vector3(-4.85, -0.32, -4.15)
+		fir_sap.scale = Vector3(1.68, 1.68, 1.68)
+		add_child(fir_sap)
+
 	var bench := AssetCatalog.instantiate_model("res://assets/downloaded/models/painted_wooden_bench/model.gltf")
 	if bench != null:
 		bench.position = Vector3(-2.35, -0.32, -2.15)
 		bench.rotation_degrees.y = 32.0
 		add_child(bench)
 
-	var shrub_l := AssetCatalog.instantiate_single_variant("res://assets/downloaded/models/shrub_02/model.gltf", 0)
+	var shrub_l := AssetCatalog.instantiate_single_variant("res://assets/downloaded/models/periwinkle_plant/model.gltf", 0)
 	if shrub_l != null:
-		shrub_l.position = Vector3(-3.3, -0.34, -3.2)
-		shrub_l.scale = Vector3(1.15, 1.15, 1.15)
+		shrub_l.position = Vector3(-3.35, -0.34, -3.15)
+		shrub_l.scale = Vector3(1.18, 1.18, 1.18)
 		add_child(shrub_l)
 
-	var shrub_r := AssetCatalog.instantiate_single_variant("res://assets/downloaded/models/shrub_03/model.gltf", 0)
+	var shrub_r := AssetCatalog.instantiate_single_variant("res://assets/downloaded/models/shrub_01/model.gltf", 0)
 	if shrub_r != null:
-		shrub_r.position = Vector3(3.2, -0.34, -3.0)
-		shrub_r.scale = Vector3(1.25, 1.25, 1.25)
+		shrub_r.position = Vector3(3.25, -0.34, -3.05)
+		shrub_r.scale = Vector3(1.42, 1.42, 1.42)
 		add_child(shrub_r)
 
-	var nettle := AssetCatalog.instantiate_single_variant("res://assets/downloaded/models/nettle_plant/model.gltf", 4)
+	var nettle := AssetCatalog.instantiate_single_variant("res://assets/downloaded/models/nettle_plant/model.gltf", 0)
 	if nettle != null:
 		nettle.position = Vector3(-1.85, -0.32, -1.55)
 		nettle.scale = Vector3(3.2, 3.2, 3.2)
 		add_child(nettle)
+
+	for dand_cfg in [
+		[Vector3(-1.38, -0.32, -1.18), 2.35, 25.0],
+		[Vector3(2.52, -0.32, -1.78), 2.15, 140.0],
+	]:
+		var dand := AssetCatalog.instantiate_single_variant("res://assets/downloaded/models/dandelion_01/model.gltf", 0)
+		if dand != null:
+			dand.position = dand_cfg[0]
+			dand.scale = Vector3.ONE * float(dand_cfg[1])
+			dand.rotation_degrees.y = float(dand_cfg[2])
+			add_child(dand)
+
+	for fescue_cfg in [
+		[Vector3(-2.65, -0.32, -1.45), 3.40, 18.0],
+		[Vector3(2.85, -0.32, -2.25), 3.60, 96.0],
+		[Vector3(1.55, -0.32, -2.55), 3.15, 210.0],
+	]:
+		var fescue := AssetCatalog.instantiate_single_variant("res://assets/downloaded/models/grass_medium_01/model.gltf", 0)
+		if fescue != null:
+			fescue.position = fescue_cfg[0]
+			fescue.scale = Vector3.ONE * float(fescue_cfg[1])
+			fescue.rotation_degrees.y = float(fescue_cfg[2])
+			add_child(fescue)
+
+	for turf_cfg in [
+		[Vector3(-1.60, -0.33, -2.35), 1.08, 42.0],
+		[Vector3(2.15, -0.33, -1.55), 1.02, 165.0],
+	]:
+		var turf_p := AssetCatalog.instantiate_single_variant("res://assets/downloaded/models/grass_bermuda_01/model.gltf", 0)
+		if turf_p != null:
+			turf_p.position = turf_cfg[0]
+			turf_p.scale = Vector3.ONE * float(turf_cfg[1])
+			turf_p.rotation_degrees.y = float(turf_cfg[2])
+			add_child(turf_p)
 
 	# Утоптанный круглый помост под персонажем
 	var ped := MeshInstance3D.new()

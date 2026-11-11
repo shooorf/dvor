@@ -45,12 +45,12 @@ winget install --id Python.Python.3.13 -e
 git pull
 .\run.bat
 ```
-Скрипт `run.bat` сам увидит новую версию пакета 4K-ассетов (`v3`), автоматически докачает недостающие 4K-текстуры ветвей/листвы и 3D-фотосканы Poly Haven + ambientCG, импортирует их и запустит игру!
+Скрипт `run.bat` сам увидит новую версию пакета 4K-ассетов (`v4`), автоматически докачает недостающие 4K-текстуры ветвей/листвы и 3D-фотосканы Poly Haven + ambientCG, импортирует их и запустит игру!
 
 ### Если разворачиваете с нуля:
 1. **`.\setup.bat`** — скачает портативный Godot 4.7.2 в `.engine/` и загрузит все 4K PBR-текстуры, 4K HDRI-небо и 3D-модели в `assets/downloaded/`.
 2. **`.\run.bat`** — запустит игру в режиме Forward+ (`editor.bat` — откроет проект в визуальном 3D-редакторе Godot).
-3. **`.\build.bat`** — скомпилирует автономный **`dist\ArenaSandbox_Win64.zip`** для отправки друзьям (им не нужны ни Python, ни Git, ни Godot).
+3. **`.\build.bat`** — скомпилирует автономную сборку в папку **`dist\ArenaSandbox\`** (`ArenaSandbox.exe` + `.pck`, без автоупаковки в `.zip` — можно упаковать любым архиватором для отправки друзьям).
 
 ---
 
@@ -81,9 +81,9 @@ git pull
 game1/
 ├── project.godot                 # Конфигурация Godot 4.7 (Forward+, 8K тени, физика, управление)
 ├── export_presets.cfg            # Настройки экспорта в Windows x64 .exe
-├── setup.bat / setup.ps1         # Автоустановка портативного движка и 4K CC0-ассетов (Pack v3)
-├── run.bat / editor.bat          # Запуск игры (с автопроверкой Pack v3) или редактора Godot
-├── build.bat / build.ps1         # Компиляция в dist/ArenaSandbox_Win64.zip
+├── setup.bat / setup.ps1         # Автоустановка портативного движка и 4K CC0-ассетов (Pack v4)
+├── run.bat / editor.bat          # Запуск игры (с автопроверкой Pack v4) или редактора Godot
+├── build.bat / build.ps1         # Компиляция автономного .exe в dist/ArenaSandbox/
 ├── scripts/
 │   └── fetch_assets.py           # Мультипоточный загрузчик 4K PBR, HDRI и 3D-фотосканов Poly Haven + KayKit
 └── src/

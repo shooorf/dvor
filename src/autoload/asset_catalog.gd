@@ -249,8 +249,28 @@ func get_pbr_material(
 	return mat
 
 
+const FOLIAGE_ALPHA_MODELS: Array[String] = [
+	"fir_sapling",
+	"pine_sapling_small",
+	"shrub_01",
+	"shrub_02",
+	"shrub_03",
+	"shrub_04",
+	"periwinkle_plant",
+	"shrub_sorrel_01",
+	"fern_02",
+	"grass_medium_01",
+	"grass_medium_02",
+	"grass_bermuda_01",
+	"weed_plant_02",
+	"nettle_plant",
+	"celandine_01",
+	"dandelion_01",
+	"moss_01",
+]
+
 ## Извлекает отдельные локальные Mesh-варианты из составных glTF-наборов растений Poly Haven
-## (с сохранением поворота узла glTF и сборкой пышных кустов из отдельных веток для shrub_*).
+## (с сортировкой по максимальной детализации LOD0 и сборкой пышных многоствольных кустов и дернины под RTX 4070).
 func get_model_submeshes(res_path: String) -> Array[Mesh]:
 	if _submesh_cache.has(res_path):
 		return _submesh_cache[res_path]
@@ -269,18 +289,146 @@ func get_model_submeshes(res_path: String) -> Array[Mesh]:
 				queue.append(ch)
 		inst.free()
 
+	# Сортируем варианты по убыванию полигонажа, чтобы индекс [0] всегда давал самый пышный LOD0-вариант!
+	if raw_meshes.size() > 1:
+		raw_meshes.sort_custom(func(a: Mesh, b: Mesh) -> bool:
+			return _get_mesh_weight(a) > _get_mesh_weight(b)
+		)
+
 	var out: Array[Mesh] = raw_meshes
-	# В Poly Haven модели shrub_02 / shrub_03 / shrub_04 состоят из отдельных веточек;
-	# собираем из них полноценный густой многоствольный куст в качестве основного меша!
-	if ("/shrub_02/" in res_path or "/shrub_03/" in res_path or "/shrub_04/" in res_path) and not raw_meshes.is_empty():
-		var cluster := _build_bush_cluster_mesh(raw_meshes, res_path)
-		if cluster != null:
-			out = [cluster]
-			for rm in raw_meshes:
-				out.append(rm)
+	if not raw_meshes.is_empty():
+		if "/shrub_01/" in res_path:
+			var s01 := _build_shrub01_cluster_mesh(raw_meshes[0])
+			if s01 != null:
+				out = [s01]
+		elif (
+			"/shrub_02/" in res_path
+			or "/shrub_03/" in res_path
+			or "/shrub_04/" in res_path
+			or "/periwinkle_plant/" in res_path
+			or "/weed_plant_02/" in res_path
+			or "/shrub_sorrel_01/" in res_path
+		):
+			var cluster := _build_bush_cluster_mesh(raw_meshes, res_path)
+			if cluster != null:
+				out = [cluster]
+				for rm in raw_meshes:
+					out.append(rm)
+		elif "/grass_bermuda_01/" in res_path:
+			var top_shoots: Array[Mesh] = raw_meshes.slice(0, mini(10, raw_meshes.size()))
+			var turf := _build_ground_patch_mesh(top_shoots, 32, 0.34, 3.15, 7.0)
+			if turf != null:
+				out = [turf]
+		elif "/moss_01/" in res_path:
+			var moss_pad := _build_ground_patch_mesh(raw_meshes, 84, 0.22, 3.35, 24.0)
+			if moss_pad != null:
+				out = [moss_pad]
 
 	_submesh_cache[res_path] = out
 	return out
+
+
+func _get_mesh_weight(m: Mesh) -> int:
+	if m == null or m.get_surface_count() == 0:
+		return 0
+	var total := 0
+	for s in range(m.get_surface_count()):
+		var arr := m.surface_get_arrays(s)
+		if arr.size() > Mesh.ARRAY_INDEX and arr[Mesh.ARRAY_INDEX] != null and (arr[Mesh.ARRAY_INDEX] as PackedInt32Array).size() > 0:
+			total += (arr[Mesh.ARRAY_INDEX] as PackedInt32Array).size()
+		elif arr.size() > Mesh.ARRAY_VERTEX and arr[Mesh.ARRAY_VERTEX] != null:
+			total += (arr[Mesh.ARRAY_VERTEX] as PackedVector3Array).size()
+	return total
+
+
+## Собирает все 9 фотосканированных побегов shrub_01 (156 012 треугольников), лежащих вдоль оси X,
+## в единый роскошный центрированный куст без потери ни одного полигона!
+func _build_shrub01_cluster_mesh(src_mesh: Mesh) -> ArrayMesh:
+	if src_mesh == null or src_mesh.get_surface_count() == 0:
+		return null
+	var arrays := src_mesh.surface_get_arrays(0).duplicate(true)
+	var verts: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+	var nrms: PackedVector3Array = arrays[Mesh.ARRAY_NORMAL]
+	if verts.is_empty():
+		return null
+
+	const CUTS: Array[float] = [-2.19, -1.77, -1.44, -1.20, -1.00, -0.75, -0.45, -0.15]
+	const CENTERS: Array[float] = [-2.37, -1.99, -1.60, -1.30, -1.10, -0.88, -0.60, -0.29, 0.02]
+
+	var bases: Array[Basis] = []
+	var nrm_bases: Array[Basis] = []
+	var offsets: Array[Vector3] = []
+	for k in range(9):
+		var yaw := float(k) * (TAU / 9.0) + float(k % 3) * 0.14
+		var tilt := deg_to_rad(10.0 + float(k % 3) * 4.5)
+		var sc := 2.32 * (0.94 + float(k % 3) * 0.06)
+		var rot_b := Basis(Vector3.UP, yaw) * Basis(Vector3.RIGHT, tilt)
+		nrm_bases.append(rot_b)
+		bases.append(rot_b.scaled(Vector3(sc, sc, sc)))
+		offsets.append(Vector3(cos(yaw) * 0.14, 0.0, sin(yaw) * 0.14))
+
+	var has_nrms := (nrms.size() == verts.size())
+	for i in range(verts.size()):
+		var v := verts[i]
+		var idx := 8
+		for c_idx in range(8):
+			if v.x < CUTS[c_idx]:
+				idx = c_idx
+				break
+		var local_v := Vector3(v.x - CENTERS[idx], v.y, v.z)
+		verts[i] = bases[idx] * local_v + offsets[idx]
+		if has_nrms:
+			nrms[i] = (nrm_bases[idx] * nrms[i]).normalized()
+
+	arrays[Mesh.ARRAY_VERTEX] = verts
+	if has_nrms:
+		arrays[Mesh.ARRAY_NORMAL] = nrms
+
+	var out_mesh := ArrayMesh.new()
+	out_mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	var mat := src_mesh.surface_get_material(0)
+	if mat != null:
+		out_mesh.surface_set_material(0, mat)
+	return out_mesh
+
+
+func _build_ground_patch_mesh(
+	shoots: Array[Mesh],
+	shoot_count: int,
+	patch_radius: float,
+	base_scale: float,
+	max_tilt_deg: float = 8.0
+) -> ArrayMesh:
+	if shoots.is_empty():
+		return null
+	var st := SurfaceTool.new()
+	var mat: Material = null
+	for sm in shoots:
+		if sm != null and sm.get_surface_count() > 0 and sm.surface_get_material(0) != null:
+			mat = sm.surface_get_material(0)
+			break
+
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	for i in range(shoot_count):
+		var src: Mesh = shoots[i % shoots.size()]
+		if src == null or src.get_surface_count() == 0:
+			continue
+		var r_frac := sqrt((float(i) + 0.5) / float(shoot_count))
+		var ang := float(i) * 2.399963
+		var pos := Vector3(cos(ang) * patch_radius * r_frac, 0.0, sin(ang) * patch_radius * r_frac)
+		var yaw := ang + PI * 0.5 + float(i % 5) * 0.18
+		var tilt := deg_to_rad(max_tilt_deg * r_frac)
+		var sc := base_scale * (1.10 - 0.24 * r_frac)
+		var b := (Basis(Vector3.UP, yaw) * Basis(Vector3.RIGHT, tilt)).scaled(Vector3(sc, sc, sc))
+		for s in range(src.get_surface_count()):
+			st.append_from(src, s, Transform3D(b, pos))
+
+	st.generate_tangents()
+	var out_mesh := ArrayMesh.new()
+	st.commit(out_mesh)
+	if mat != null and out_mesh.get_surface_count() > 0:
+		out_mesh.surface_set_material(0, mat)
+	return out_mesh
 
 
 func _bake_submesh_basis_and_materials(mi: MeshInstance3D) -> Mesh:
@@ -318,18 +466,38 @@ func _build_bush_cluster_mesh(stems: Array[Mesh], res_path: String) -> ArrayMesh
 			if mat != null:
 				break
 
-	var is_small_herb := ("/shrub_03/" in res_path or "/shrub_04/" in res_path)
-	var stem_count := 3 if is_small_herb else 2
-	var base_scale := 2.65 if "/shrub_03/" in res_path else (2.95 if "/shrub_04/" in res_path else 1.18)
-	var spread_r := 0.16 if is_small_herb else 0.11
+	var stem_count := 5
+	var base_scale := 1.24
+	var spread_r := 0.14
+
+	if "/shrub_03/" in res_path:
+		stem_count = 6
+		base_scale = 2.75
+		spread_r = 0.18
+	elif "/shrub_04/" in res_path:
+		stem_count = 2
+		base_scale = 2.95
+		spread_r = 0.12
+	elif "/periwinkle_plant/" in res_path:
+		stem_count = 5
+		base_scale = 2.45
+		spread_r = 0.15
+	elif "/weed_plant_02/" in res_path:
+		stem_count = 5
+		base_scale = 2.15
+		spread_r = 0.18
+	elif "/shrub_sorrel_01/" in res_path:
+		stem_count = 11
+		base_scale = 4.60
+		spread_r = 0.16
 
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
 	for i in range(stem_count):
 		var src: Mesh = stems[i % stems.size()]
 		if src == null or src.get_surface_count() == 0:
 			continue
-		var yaw := float(i) * (TAU / float(stem_count)) + (0.42 if not is_small_herb and i == 1 else float(i % 2) * 0.24)
-		var tilt := deg_to_rad(9.0 + float(i % 3) * 5.0)
+		var yaw := float(i) * (TAU / float(stem_count)) + (0.68 if stem_count == 2 and i == 1 else float(i % 2) * 0.22)
+		var tilt := deg_to_rad(10.0 + float(i % 3) * 5.5)
 		var sc := base_scale * (0.94 + float(i % 3) * 0.08)
 		var b := (Basis(Vector3.UP, yaw) * Basis(Vector3.RIGHT, tilt)).scaled(Vector3(sc, sc, sc))
 		var offset := Vector3(cos(yaw) * spread_r, 0.0, sin(yaw) * spread_r)
@@ -460,6 +628,7 @@ func _upgrade_scene_alpha_materials(res_path: String, ps: PackedScene) -> Packed
 		return ps
 
 	var model_id := model_dir.get_file()
+	var is_foliage_model := model_id in FOLIAGE_ALPHA_MODELS
 	var diff_tex := _find_model_texture(model_dir, model_id, "diff")
 	var nor_tex := _find_model_texture(model_dir, model_id, "nor_gl")
 	var arm_tex := _find_model_texture(model_dir, model_id, "arm")
@@ -481,13 +650,18 @@ func _upgrade_scene_alpha_materials(res_path: String, ps: PackedScene) -> Packed
 		if cur is MeshInstance3D:
 			var mi := cur as MeshInstance3D
 			if mi.mesh != null and mi.mesh.get_surface_count() > 0:
-				var base_mat := mi.mesh.surface_get_material(0)
-				if base_mat is BaseMaterial3D and (base_mat as BaseMaterial3D).transparency != BaseMaterial3D.TRANSPARENCY_DISABLED:
-					if diff_tex == null and (base_mat as BaseMaterial3D).albedo_texture != null:
-						sm.set_shader_parameter("tex_alb", (base_mat as BaseMaterial3D).albedo_texture)
-					for s in range(mi.mesh.get_surface_count()):
+				for s in range(mi.mesh.get_surface_count()):
+					var s_mat := mi.mesh.surface_get_material(s)
+					var mname := s_mat.resource_name.to_lower() if s_mat != null else ""
+					var is_wood_surface := ("bark" in mname or "branch" in mname or "trunk" in mname) and not ("twig" in mname or "leaf" in mname)
+					if is_wood_surface:
+						continue
+					var has_trans := (s_mat is BaseMaterial3D and (s_mat as BaseMaterial3D).transparency != BaseMaterial3D.TRANSPARENCY_DISABLED)
+					if is_foliage_model or has_trans:
+						if diff_tex == null and s_mat is BaseMaterial3D and (s_mat as BaseMaterial3D).albedo_texture != null:
+							sm.set_shader_parameter("tex_alb", (s_mat as BaseMaterial3D).albedo_texture)
 						mi.mesh.surface_set_material(s, sm)
-					modified = true
+						modified = true
 		for ch in cur.get_children():
 			queue.append(ch)
 
@@ -501,9 +675,10 @@ func _upgrade_scene_alpha_materials(res_path: String, ps: PackedScene) -> Packed
 
 
 func _find_model_texture(model_dir: String, model_id: String, map_suffix: String) -> Texture2D:
-	for res_tag in ["4k", "2k", "1k"]:
-		for ext in ["jpg", "png"]:
-			var candidate := "%s/textures/%s_%s_%s.%s" % [model_dir, model_id, map_suffix, res_tag, ext]
-			if ResourceLoader.exists(candidate) or FileAccess.file_exists(ProjectSettings.globalize_path(candidate)):
-				return _load_texture_safe(candidate)
+	for sub_prefix in ["", "_twigs", "_twig", "_leaves", "_leaf"]:
+		for res_tag in ["4k", "2k", "1k"]:
+			for ext in ["jpg", "png"]:
+				var candidate := "%s/textures/%s%s_%s_%s.%s" % [model_dir, model_id, sub_prefix, map_suffix, res_tag, ext]
+				if ResourceLoader.exists(candidate) or FileAccess.file_exists(ProjectSettings.globalize_path(candidate)):
+					return _load_texture_safe(candidate)
 	return null

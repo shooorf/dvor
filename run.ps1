@@ -9,7 +9,7 @@ Set-Location $RootDir
 $GodotTag = "4.7.2-stable"
 $GodotExe = Join-Path $RootDir ".engine\Godot_v$GodotTag`_win64.exe"
 $ManifestPath = Join-Path $RootDir "assets\downloaded\manifest.json"
-$ExpectedPackVersion = 3
+$ExpectedPackVersion = 4
 
 $NeedSetup = (-not (Test-Path $GodotExe)) -or (-not (Test-Path $ManifestPath))
 if (-not $NeedSetup) {

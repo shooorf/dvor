@@ -34,7 +34,7 @@ USER_AGENT = "DvorSandboxAssetFetcher/3.0 (Godot4 Forward+)"
 ROOT_DIR = Path(__file__).resolve().parent.parent
 OUT_DIR = ROOT_DIR / "assets" / "downloaded"
 
-ASSET_PACK_VERSION = 3
+ASSET_PACK_VERSION = 4
 
 # Реальное предзакатное летнее небо над просёлочной дорогой в Европе (Poly Haven CC0)
 HDRI_ID = "evening_road_01_puresky"
@@ -56,22 +56,33 @@ PBR_TEXTURES = [
     "corrugated_iron",
     "gravel_concrete_02",
     "metal_plate",
-    # Настоящая кора деревьев (сосна, ива/липа/яблоня)
+    # Настоящая 4K кора деревьев (сосна, дуб черешчатый, клён остролистный, осина/ива/яблоня)
     "knotted_pine_bark",
     "bark_willow_02",
+    "jolcham_oak_bark_01",
+    "trident_maple_bark",
+    "bark_willow",
 ]
 
 POLYHAVEN_MODELS = [
-    # Реальные 3D-фотосканы растительности, травы, крапивы, кустов и лесного бурелома
+    # Реальные 3D-фотосканы растительности, молодняка хвои, травы, цветов, кустов и бурелома
+    "fir_sapling",
+    "pine_sapling_small",
+    "shrub_01",
     "shrub_02",
     "shrub_03",
     "shrub_04",
+    "periwinkle_plant",
+    "shrub_sorrel_01",
     "fern_02",
     "grass_medium_01",
     "grass_medium_02",
+    "grass_bermuda_01",
     "weed_plant_02",
     "nettle_plant",
     "celandine_01",
+    "dandelion_01",
+    "moss_01",
     "tree_stump_01",
     "dead_tree_trunk",
     "dry_branches_medium_01",
@@ -123,10 +134,55 @@ POLYHAVEN_TWIG_SETS = {
     "pine_twig": "pine_tree_01",
 }
 
-# Реальные фотосканированные PBR-веточки и резные листья европейских лиственных деревьев (ambientCG CC0)
+# Реальные фотосканированные PBR-веточки, листья европейских деревьев и колоски злаков (ambientCG CC0)
 AMBIENTCG_ZIP_SETS = {
     "leaf_twig": {
         "asset_id": "LeafSet005",
+        "files": {
+            "_Color.jpg": "diff.jpg",
+            "_Opacity.jpg": "alpha.jpg",
+            "_NormalGL.jpg": "nor_gl.jpg",
+            "_Roughness.jpg": "rough.jpg",
+        },
+    },
+    "oak_leaf": {
+        "asset_id": "LeafSet016",
+        "files": {
+            "_Color.jpg": "diff.jpg",
+            "_Opacity.jpg": "alpha.jpg",
+            "_NormalGL.jpg": "nor_gl.jpg",
+            "_Roughness.jpg": "rough.jpg",
+        },
+    },
+    "maple_leaf": {
+        "asset_id": "LeafSet010",
+        "files": {
+            "_Color.jpg": "diff.jpg",
+            "_Opacity.jpg": "alpha.jpg",
+            "_NormalGL.jpg": "nor_gl.jpg",
+            "_Roughness.jpg": "rough.jpg",
+        },
+    },
+    "maple_aug_leaf": {
+        "asset_id": "LeafSet027",
+        "files": {
+            "_Color.jpg": "diff.jpg",
+            "_Opacity.jpg": "alpha.jpg",
+            "_NormalGL.jpg": "nor_gl.jpg",
+            "_Roughness.jpg": "rough.jpg",
+        },
+    },
+    "aspen_leaf": {
+        "asset_id": "LeafSet024",
+        "files": {
+            "_Color.jpg": "diff.jpg",
+            "_Opacity.jpg": "alpha.jpg",
+            "_NormalGL.jpg": "nor_gl.jpg",
+            "_Roughness.jpg": "rough.jpg",
+        },
+    },
+    "meadow_stalks": {
+        "asset_id": "Foliage003",
         "files": {
             "_Color.jpg": "diff.jpg",
             "_Opacity.jpg": "alpha.jpg",
@@ -189,15 +245,25 @@ def download_and_extract_ambientcg(
         return (str(dest_dir.relative_to(ROOT_DIR)), total_cached, True)
 
     dest_dir.mkdir(parents=True, exist_ok=True)
-    res_tag = "1K-JPG" if quality == "1k" else "2K-JPG"
+    res_candidates = ["1K-JPG"] if quality == "1k" else (["2K-JPG", "1K-JPG"] if quality == "2k" else ["4K-JPG", "2K-JPG"])
     asset_id = spec["asset_id"]
-    url = f"https://ambientcg.com/get?file={asset_id}_{res_tag}.zip"
+    url = f"https://ambientcg.com/get?file={asset_id}_{res_candidates[0]}.zip"
 
     for attempt in range(retries):
         try:
-            req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-            with urllib.request.urlopen(req, timeout=120) as resp:
-                zip_bytes = resp.read()
+            zip_bytes = b""
+            for rtag in res_candidates:
+                try_url = f"https://ambientcg.com/get?file={asset_id}_{rtag}.zip"
+                try:
+                    req = urllib.request.Request(try_url, headers={"User-Agent": USER_AGENT})
+                    with urllib.request.urlopen(req, timeout=120) as resp:
+                        zip_bytes = resp.read()
+                    url = try_url
+                    break
+                except urllib.error.HTTPError as he:
+                    if he.code == 404 and rtag != res_candidates[-1]:
+                        continue
+                    raise
             extracted_total = 0
             with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
                 names = zf.namelist()
@@ -293,14 +359,16 @@ def build_download_plan(quality: str) -> tuple[list[tuple[str, Path]], set[Path]
         tasks.append((gltf_entry["url"], model_dir / "model.gltf"))
         for rel_path, info in gltf_entry.get("include", {}).items():
             tasks.append((info["url"], model_dir / rel_path))
-        if "Alpha" in mmeta:
-            alpha_dict = mmeta["Alpha"]
-            alpha_res = gltf_res if gltf_res in alpha_dict else ("1k" if "1k" in alpha_dict else next(iter(alpha_dict.keys())))
-            alpha_fmts = alpha_dict[alpha_res]
-            if "jpg" in alpha_fmts:
-                tasks.append((alpha_fmts["jpg"]["url"], model_dir / "textures" / "alpha.jpg"))
-            elif "png" in alpha_fmts:
-                tasks.append((alpha_fmts["png"]["url"], model_dir / "textures" / "alpha.png"))
+        for alpha_key in ("Alpha", "opacity", "twigs_alpha", "twig_alpha", "twigs_mask", "twig_mask", "Mask"):
+            if alpha_key in mmeta:
+                alpha_dict = mmeta[alpha_key]
+                alpha_res = gltf_res if gltf_res in alpha_dict else ("1k" if "1k" in alpha_dict else next(iter(alpha_dict.keys())))
+                alpha_fmts = alpha_dict[alpha_res]
+                if "jpg" in alpha_fmts:
+                    tasks.append((alpha_fmts["jpg"]["url"], model_dir / "textures" / "alpha.jpg"))
+                elif "png" in alpha_fmts:
+                    tasks.append((alpha_fmts["png"]["url"], model_dir / "textures" / "alpha.png"))
+                break
 
     print("[5/5] Adding rigged characters and melee weapons (CC0)...")
     for fname, url in CHARACTER_GLBS.items():
