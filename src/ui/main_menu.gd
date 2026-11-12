@@ -5,19 +5,24 @@ extends Node3D
 
 var _turntable: Node3D = null
 var _preview_holder: Node3D = null
+var _backdrop_root: Node3D = null
+var _world_env: WorldEnvironment = null
+var _ground_mesh: BoxMesh = null
+var _pedestal_mesh: CylinderMesh = null
 var _name_edit: LineEdit = null
 var _class_opt: OptionButton = null
 var _color_picker: ColorPickerButton = null
 var _ip_edit: LineEdit = null
 var _port_spin: SpinBox = null
 var _status_lbl: Label = null
+var _leaving_menu: bool = false
+var _has_net_message: bool = false
 
 
 func _ready() -> void:
 	Input.set_mouse_mode(Input.MOUSE_MODE_VISIBLE)
-	_build_3d_backdrop()
+	_build_instant_stage()
 	_build_menu_ui()
-	_refresh_character_preview()
 
 	NetworkManager.connection_failed_msg.connect(_on_net_error)
 	NetworkManager.connection_status_msg.connect(_on_net_status)
@@ -26,35 +31,50 @@ func _ready() -> void:
 		_on_net_error(NetworkManager.disconnect_reason)
 		NetworkManager.disconnect_reason = ""
 
+	if DisplayServer.get_name() == "headless":
+		_refresh_character_preview()
+	else:
+		_stream_diorama_async()
+
+
+func _exit_tree() -> void:
+	_leaving_menu = true
+
+
+func _is_menu_cancelled() -> bool:
+	return _leaving_menu or not is_inside_tree()
+
 
 func _process(delta: float) -> void:
 	if _turntable != null:
 		_turntable.rotation.y += delta * 0.32
 
 
-func _build_3d_backdrop() -> void:
-	var world_env := WorldEnvironment.new()
+func _set_stream_hint(txt: String) -> void:
+	if _has_net_message or _status_lbl == null:
+		return
+	_status_lbl.add_theme_color_override("font_color", Color(0.68, 0.80, 0.88, 0.85))
+	_status_lbl.text = txt
+
+
+func _build_instant_stage() -> void:
+	_world_env = WorldEnvironment.new()
 	var env := Environment.new()
 	var sky := Sky.new()
-	var hdri := AssetCatalog.load_sky_hdri()
-	if hdri != null:
-		var sm := PanoramaSkyMaterial.new()
-		sm.panorama = hdri
-		sm.energy_multiplier = 0.85
-		sky.sky_material = sm
-	else:
-		var psm := ProceduralSkyMaterial.new()
-		psm.sky_top_color = Color(0.22, 0.42, 0.70)
-		psm.sky_horizon_color = Color(0.62, 0.70, 0.76)
-		sky.sky_material = psm
+	var psm := ProceduralSkyMaterial.new()
+	psm.sky_top_color = Color(0.22, 0.42, 0.70)
+	psm.sky_horizon_color = Color(0.62, 0.70, 0.76)
+	psm.ground_horizon_color = Color(0.22, 0.26, 0.16)
+	psm.ground_bottom_color = Color(0.10, 0.13, 0.08)
+	sky.sky_material = psm
 	env.background_mode = Environment.BG_SKY
 	env.sky = sky
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
 	env.ambient_light_color = Color(0.20, 0.32, 0.50)
 	env.ambient_light_sky_contribution = 0.34
 	env.ambient_light_energy = 0.62
-	world_env.environment = env
-	add_child(world_env)
+	_world_env.environment = env
+	add_child(_world_env)
 
 	var sun := DirectionalLight3D.new()
 	sun.light_color = Color(1.0, 0.92, 0.79)
@@ -76,74 +96,154 @@ func _build_3d_backdrop() -> void:
 	_turntable.position = Vector3(0.0, 0.0, 0.0)
 	add_child(_turntable)
 
-	# Августовская луговая поляна
+	_backdrop_root = Node3D.new()
+	_backdrop_root.name = "DioramaBackdrop"
+	add_child(_backdrop_root)
+
+	# Августовская луговая поляна (мгновенный материал в 1-м кадре -> 4K PBR без фриза)
 	var ground := MeshInstance3D.new()
-	var gm := BoxMesh.new()
-	gm.size = Vector3(80.0, 0.4, 80.0)
-	gm.material = AssetCatalog.get_pbr_material("leafy_grass", Vector3(0.24, 0.24, 0.24), true)
-	ground.mesh = gm
+	_ground_mesh = BoxMesh.new()
+	_ground_mesh.size = Vector3(80.0, 0.4, 80.0)
+	var g_placeholder := StandardMaterial3D.new()
+	g_placeholder.albedo_color = Color(0.18, 0.26, 0.12)
+	g_placeholder.roughness = 0.92
+	_ground_mesh.material = g_placeholder
+	ground.mesh = _ground_mesh
 	ground.position = Vector3(0.0, -0.52, -6.0)
 	add_child(ground)
 
-	# Фоновые деревья (берёза, дуб, клён, ель), 3D-ельник, деревянная лавочка и фотосканированный луг
-	if DisplayServer.get_name() != "headless":
-		var birch_mesh := RealisticFoliage._generate_tree_mesh(RealisticFoliage.TreeSpecies.BIRCH, 77)
-		var bmi := MeshInstance3D.new()
-		bmi.mesh = birch_mesh
-		bmi.position = Vector3(-4.2, -0.32, -5.4)
-		bmi.scale = Vector3(0.82, 0.82, 0.82)
-		add_child(bmi)
+	# Утоптанный круглый помост под персонажем
+	var ped := MeshInstance3D.new()
+	_pedestal_mesh = CylinderMesh.new()
+	_pedestal_mesh.top_radius = 1.42
+	_pedestal_mesh.bottom_radius = 1.62
+	_pedestal_mesh.height = 0.32
+	_pedestal_mesh.radial_segments = 32
+	var p_placeholder := StandardMaterial3D.new()
+	p_placeholder.albedo_color = Color(0.28, 0.24, 0.19)
+	p_placeholder.roughness = 0.90
+	_pedestal_mesh.material = p_placeholder
+	ped.mesh = _pedestal_mesh
+	ped.position = Vector3(0.0, -0.16, 0.0)
+	_turntable.add_child(ped)
 
-		var maple_mesh := RealisticFoliage._generate_tree_mesh(RealisticFoliage.TreeSpecies.MAPLE, 514)
-		var mmi := MeshInstance3D.new()
-		mmi.mesh = maple_mesh
-		mmi.position = Vector3(4.6, -0.32, -6.5)
-		mmi.scale = Vector3(0.84, 0.84, 0.84)
-		add_child(mmi)
+	_preview_holder = Node3D.new()
+	_preview_holder.scale = Vector3(0.84, 0.84, 0.84)
+	_turntable.add_child(_preview_holder)
 
-		var oak_mesh := RealisticFoliage._generate_tree_mesh(RealisticFoliage.TreeSpecies.OAK, 412)
-		var omi := MeshInstance3D.new()
-		omi.mesh = oak_mesh
-		omi.position = Vector3(1.6, -0.32, -10.4)
-		omi.scale = Vector3(0.80, 0.80, 0.80)
-		add_child(omi)
 
-		var spruce_mesh := RealisticFoliage._generate_tree_mesh(RealisticFoliage.TreeSpecies.SPRUCE, 99)
-		var smi := MeshInstance3D.new()
-		smi.mesh = spruce_mesh
-		smi.position = Vector3(-2.6, -0.32, -8.8)
-		smi.scale = Vector3(0.78, 0.78, 0.78)
-		add_child(smi)
+func _stream_diorama_async() -> void:
+	var tree := get_tree()
+	await tree.process_frame
+	await tree.process_frame
+	if _is_menu_cancelled():
+		return
 
-	var fir_sap := AssetCatalog.instantiate_single_variant("res://assets/downloaded/models/fir_sapling/model.gltf", 0)
-	if fir_sap != null:
-		fir_sap.position = Vector3(-4.85, -0.32, -4.15)
-		fir_sap.scale = Vector3(1.68, 1.68, 1.68)
-		add_child(fir_sap)
+	_set_stream_hint("Подгрузка модели персонажа...")
+	await AssetCatalog.preload_resources_async(
+		AssetCatalog.get_menu_hero_preload_paths(),
+		Callable(),
+		_is_menu_cancelled
+	)
+	if _is_menu_cancelled():
+		return
+
+	_refresh_character_preview()
+	await tree.process_frame
+	if _is_menu_cancelled():
+		return
+
+	await AssetCatalog.preload_resources_async(
+		AssetCatalog.get_menu_backdrop_preload_paths(),
+		func(f: float) -> void:
+			_set_stream_hint("Фоновая подгрузка 3D-диорамы (%d%%)..." % int(round(f * 65.0))),
+		_is_menu_cancelled
+	)
+	if _is_menu_cancelled():
+		return
+
+	var hdri := AssetCatalog.load_sky_hdri()
+	if hdri != null and _world_env != null and _world_env.environment != null and _world_env.environment.sky != null:
+		var sm := PanoramaSkyMaterial.new()
+		sm.panorama = hdri
+		sm.energy_multiplier = 0.85
+		_world_env.environment.sky.sky_material = sm
+	await tree.process_frame
+	if _is_menu_cancelled():
+		return
+
+	if _ground_mesh != null:
+		_ground_mesh.material = AssetCatalog.get_pbr_material("leafy_grass", Vector3(0.24, 0.24, 0.24), true)
+	if _pedestal_mesh != null:
+		_pedestal_mesh.material = AssetCatalog.get_pbr_material("grass_path_2", Vector3(0.42, 0.42, 0.42), true)
+	await tree.process_frame
+	if _is_menu_cancelled():
+		return
+
+	# Вечерний костёр справа от бойца (с новым шейдерным пламенем и дымом)
+	var fire_holder := Node3D.new()
+	fire_holder.position = Vector3(1.95, -0.28, -1.15)
+	_backdrop_root.add_child(fire_holder)
+	var fp := AssetCatalog.instantiate_model("res://assets/downloaded/models/stone_fire_pit/model.gltf")
+	if fp != null:
+		fp.scale = Vector3(0.85, 0.85, 0.85)
+		fire_holder.add_child(fp)
+	VfxHelper.attach_fire_effect(fire_holder, 2.5, 11.0, 0.85)
+	await tree.process_frame
+	if _is_menu_cancelled():
+		return
+
+	var submesh_models := PackedStringArray([
+		"res://assets/downloaded/models/fir_sapling/model.gltf",
+		"res://assets/downloaded/models/periwinkle_plant/model.gltf",
+		"res://assets/downloaded/models/shrub_01/model.gltf",
+		"res://assets/downloaded/models/nettle_plant/model.gltf",
+		"res://assets/downloaded/models/dandelion_01/model.gltf",
+		"res://assets/downloaded/models/grass_medium_01/model.gltf",
+		"res://assets/downloaded/models/grass_bermuda_01/model.gltf",
+	])
+	await AssetCatalog.warm_submesh_caches_async(
+		submesh_models,
+		func(f: float) -> void:
+			_set_stream_hint("Фоновая подгрузка 3D-диорамы (%d%%)..." % int(round(65.0 + f * 15.0))),
+		_is_menu_cancelled
+	)
+	if _is_menu_cancelled():
+		return
 
 	var bench := AssetCatalog.instantiate_model("res://assets/downloaded/models/painted_wooden_bench/model.gltf")
 	if bench != null:
 		bench.position = Vector3(-2.35, -0.32, -2.15)
 		bench.rotation_degrees.y = 32.0
-		add_child(bench)
+		_backdrop_root.add_child(bench)
+
+	var fir_sap := AssetCatalog.instantiate_single_variant("res://assets/downloaded/models/fir_sapling/model.gltf", 0)
+	if fir_sap != null:
+		fir_sap.position = Vector3(-4.85, -0.32, -4.15)
+		fir_sap.scale = Vector3(1.68, 1.68, 1.68)
+		_backdrop_root.add_child(fir_sap)
 
 	var shrub_l := AssetCatalog.instantiate_single_variant("res://assets/downloaded/models/periwinkle_plant/model.gltf", 0)
 	if shrub_l != null:
 		shrub_l.position = Vector3(-3.35, -0.34, -3.15)
 		shrub_l.scale = Vector3(1.18, 1.18, 1.18)
-		add_child(shrub_l)
+		_backdrop_root.add_child(shrub_l)
 
 	var shrub_r := AssetCatalog.instantiate_single_variant("res://assets/downloaded/models/shrub_01/model.gltf", 0)
 	if shrub_r != null:
 		shrub_r.position = Vector3(3.25, -0.34, -3.05)
 		shrub_r.scale = Vector3(1.42, 1.42, 1.42)
-		add_child(shrub_r)
+		_backdrop_root.add_child(shrub_r)
+
+	await tree.process_frame
+	if _is_menu_cancelled():
+		return
 
 	var nettle := AssetCatalog.instantiate_single_variant("res://assets/downloaded/models/nettle_plant/model.gltf", 0)
 	if nettle != null:
 		nettle.position = Vector3(-1.85, -0.32, -1.55)
 		nettle.scale = Vector3(3.2, 3.2, 3.2)
-		add_child(nettle)
+		_backdrop_root.add_child(nettle)
 
 	for dand_cfg in [
 		[Vector3(-1.38, -0.32, -1.18), 2.35, 25.0],
@@ -154,7 +254,7 @@ func _build_3d_backdrop() -> void:
 			dand.position = dand_cfg[0]
 			dand.scale = Vector3.ONE * float(dand_cfg[1])
 			dand.rotation_degrees.y = float(dand_cfg[2])
-			add_child(dand)
+			_backdrop_root.add_child(dand)
 
 	for fescue_cfg in [
 		[Vector3(-2.65, -0.32, -1.45), 3.40, 18.0],
@@ -166,7 +266,7 @@ func _build_3d_backdrop() -> void:
 			fescue.position = fescue_cfg[0]
 			fescue.scale = Vector3.ONE * float(fescue_cfg[1])
 			fescue.rotation_degrees.y = float(fescue_cfg[2])
-			add_child(fescue)
+			_backdrop_root.add_child(fescue)
 
 	for turf_cfg in [
 		[Vector3(-1.60, -0.33, -2.35), 1.08, 42.0],
@@ -177,33 +277,39 @@ func _build_3d_backdrop() -> void:
 			turf_p.position = turf_cfg[0]
 			turf_p.scale = Vector3.ONE * float(turf_cfg[1])
 			turf_p.rotation_degrees.y = float(turf_cfg[2])
-			add_child(turf_p)
+			_backdrop_root.add_child(turf_p)
 
-	# Утоптанный круглый помост под персонажем
-	var ped := MeshInstance3D.new()
-	var cyl := CylinderMesh.new()
-	cyl.top_radius = 1.42
-	cyl.bottom_radius = 1.62
-	cyl.height = 0.32
-	cyl.radial_segments = 32
-	cyl.material = AssetCatalog.get_pbr_material("grass_path_2", Vector3(0.42, 0.42, 0.42), true)
-	ped.mesh = cyl
-	ped.position = Vector3(0.0, -0.16, 0.0)
-	_turntable.add_child(ped)
+	await tree.process_frame
+	if _is_menu_cancelled():
+		return
 
-	# Вечерний костёр справа от бойца (с новым шейдерным пламенем и дымом)
-	var fire_holder := Node3D.new()
-	fire_holder.position = Vector3(1.95, -0.28, -1.15)
-	add_child(fire_holder)
-	var fp := AssetCatalog.instantiate_model("res://assets/downloaded/models/stone_fire_pit/model.gltf")
-	if fp != null:
-		fp.scale = Vector3(0.85, 0.85, 0.85)
-		fire_holder.add_child(fp)
-	VfxHelper.attach_fire_effect(fire_holder, 2.5, 11.0, 0.85)
+	await RealisticFoliage.prepare_foliage_textures_async(
+		tree,
+		PackedStringArray(["birch", "maple", "oak", "spruce"]),
+		func(f: float) -> void:
+			_set_stream_hint("Фоновая подгрузка 3D-диорамы (%d%%)..." % int(round(80.0 + f * 18.0))),
+		_is_menu_cancelled
+	)
+	if _is_menu_cancelled():
+		return
 
-	_preview_holder = Node3D.new()
-	_preview_holder.scale = Vector3(0.84, 0.84, 0.84)
-	_turntable.add_child(_preview_holder)
+	for tree_spec in [
+		[RealisticFoliage.TreeSpecies.BIRCH, 77, Vector3(-4.2, -0.32, -5.4), 0.82],
+		[RealisticFoliage.TreeSpecies.MAPLE, 514, Vector3(4.6, -0.32, -6.5), 0.84],
+		[RealisticFoliage.TreeSpecies.OAK, 412, Vector3(1.6, -0.32, -10.4), 0.80],
+		[RealisticFoliage.TreeSpecies.SPRUCE, 99, Vector3(-2.6, -0.32, -8.8), 0.78],
+	]:
+		if _is_menu_cancelled():
+			return
+		var tmesh := RealisticFoliage._generate_tree_mesh(int(tree_spec[0]), int(tree_spec[1]))
+		var tmi := MeshInstance3D.new()
+		tmi.mesh = tmesh
+		tmi.position = tree_spec[2]
+		tmi.scale = Vector3.ONE * float(tree_spec[3])
+		_backdrop_root.add_child(tmi)
+		await tree.process_frame
+
+	_set_stream_hint("")
 
 
 func _refresh_character_preview() -> void:
@@ -480,27 +586,32 @@ func _sync_profile_fields() -> void:
 
 
 func _on_solo_pressed() -> void:
+	_leaving_menu = true
 	_sync_profile_fields()
 	NetworkManager.start_solo_sandbox()
 
 
 func _on_host_pressed() -> void:
+	_leaving_menu = true
 	_sync_profile_fields()
 	NetworkManager.host_game(int(_port_spin.value))
 
 
 func _on_join_pressed() -> void:
+	_leaving_menu = true
 	_sync_profile_fields()
 	NetworkManager.join_game(_ip_edit.text, int(_port_spin.value))
 
 
 func _on_net_error(msg: String) -> void:
+	_has_net_message = true
 	if _status_lbl != null:
 		_status_lbl.add_theme_color_override("font_color", Color(1.0, 0.42, 0.38))
 		_status_lbl.text = msg
 
 
 func _on_net_status(msg: String) -> void:
+	_has_net_message = true
 	if _status_lbl != null:
 		_status_lbl.add_theme_color_override("font_color", Color(0.55, 0.92, 0.65))
 		_status_lbl.text = msg

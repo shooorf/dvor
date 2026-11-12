@@ -90,6 +90,15 @@ static var _aspen_spray_tex: Texture2D = null
 static var _meadow_stalk_sheaf_tex: Texture2D = null
 static var _flat_normal_tex: Texture2D = null
 
+const FOLIAGE_CACHE_DIR: String = "user://foliage_cache_v3"
+const FOLIAGE_CACHE_MAGIC: int = 0x464F4C33
+const ALL_FOLIAGE_TEX_KEYS: Array[String] = [
+	"birch", "orchard", "oak", "maple", "aspen", "pine", "spruce", "stalks",
+]
+
+static var _raw_image_cache: Dictionary = {}
+static var _active_atlas_tasks: Dictionary = {}
+
 
 static func populate_world_foliage(parent: Node3D, rng: RandomNumberGenerator) -> void:
 	var root := Node3D.new()
@@ -104,41 +113,50 @@ static func populate_world_foliage(parent: Node3D, rng: RandomNumberGenerator) -
 		_build_gpu_meadow_grass(root, rng)
 
 
+static func populate_world_foliage_async(
+	parent: Node3D,
+	rng: RandomNumberGenerator,
+	tree: SceneTree,
+	progress_cb: Callable = Callable()
+) -> void:
+	var root := Node3D.new()
+	root.name = "RealisticFoliageSystem"
+	parent.add_child(root)
+
+	var placed_trees := await _build_trees_and_trunks_async(root, rng, tree, func(f: float) -> void:
+		if progress_cb.is_valid():
+			progress_cb.call(lerpf(0.0, 0.58, f))
+	)
+
+	if DisplayServer.get_name() != "headless":
+		_populate_young_conifer_saplings(root, rng)
+		if progress_cb.is_valid():
+			progress_cb.call(0.63)
+		await tree.process_frame
+
+		await _build_photoscanned_undergrowth_async(root, rng, placed_trees, tree, func(f: float) -> void:
+			if progress_cb.is_valid():
+				progress_cb.call(lerpf(0.63, 0.84, f))
+		)
+
+		await _build_gpu_meadow_grass_async(root, rng, tree, func(f: float) -> void:
+			if progress_cb.is_valid():
+				progress_cb.call(lerpf(0.84, 1.0, f))
+		)
+	elif progress_cb.is_valid():
+		progress_cb.call(1.0)
+
+
 # ============================================================================
 # 1. 7 ПОРОД ВЗРОСЛЫХ БОТАНИЧЕСКИХ ДЕРЕВЬЕВ + КОЛЛАЙДЕРЫ СТВОЛОВ
 # ============================================================================
 
-static func _build_trees_and_trunks(parent: Node3D, rng: RandomNumberGenerator) -> Array[Vector2]:
-	var trunk_bodies := StaticBody3D.new()
-	trunk_bodies.name = "TreeTrunkColliders"
-	trunk_bodies.collision_layer = 1
-	trunk_bodies.collision_mask = 0
-	parent.add_child(trunk_bodies)
-
-	var all_species: Array[int] = [
-		TreeSpecies.BIRCH, TreeSpecies.PINE, TreeSpecies.SPRUCE,
-		TreeSpecies.ORCHARD, TreeSpecies.OAK, TreeSpecies.MAPLE, TreeSpecies.ASPEN,
-	]
-
-	var species_variants: Dictionary = {}
-	if DisplayServer.get_name() != "headless":
-		for sp: int in all_species:
-			var v_cnt := _get_species_variant_count(sp)
-			var arr: Array[ArrayMesh] = []
-			for v_idx in range(v_cnt):
-				arr.append(_generate_tree_mesh(sp, 100 + sp * 37 + v_idx * 113))
-			species_variants[sp] = arr
-
-	var transforms_by_key: Dictionary = {}
-	var vista_transforms_by_key: Dictionary = {}
-	for sp: int in all_species:
-		for v_idx in range(_get_species_variant_count(sp)):
-			var k_str := "%d_%d" % [sp, v_idx]
-			transforms_by_key[k_str] = []
-			vista_transforms_by_key[k_str] = []
-
-	var placed_trees: Array[Vector2] = []
-
+static func _place_playable_zone_trees(
+	rng: RandomNumberGenerator,
+	placed_trees: Array[Vector2],
+	transforms_by_key: Dictionary,
+	trunk_bodies: StaticBody3D
+) -> void:
 	# А) Усадьбы и деревенские дворы: садовые яблони, остролистные клёны и берёзы
 	for plot in TerrainBuilder.HOUSE_PLOTS:
 		var c: Vector2 = plot["pos"]
@@ -225,6 +243,45 @@ static func _build_trees_and_trunks(parent: Node3D, rng: RandomNumberGenerator) 
 		var sc3 := rng.randf_range(0.90, 1.44)
 		_register_tree_instance(Vector2(tx, tz), sp3, sc3, rng, placed_trees, transforms_by_key, trunk_bodies)
 
+
+static func _worker_compute_border_forest(state: Dictionary) -> void:
+	var near_t: Dictionary = state["near"]
+	var vista_t: Dictionary = state["vista"]
+	_populate_primeval_border_forest(near_t, vista_t)
+
+
+static func _build_trees_and_trunks(parent: Node3D, rng: RandomNumberGenerator) -> Array[Vector2]:
+	var trunk_bodies := StaticBody3D.new()
+	trunk_bodies.name = "TreeTrunkColliders"
+	trunk_bodies.collision_layer = 1
+	trunk_bodies.collision_mask = 0
+	parent.add_child(trunk_bodies)
+
+	var all_species: Array[int] = [
+		TreeSpecies.BIRCH, TreeSpecies.PINE, TreeSpecies.SPRUCE,
+		TreeSpecies.ORCHARD, TreeSpecies.OAK, TreeSpecies.MAPLE, TreeSpecies.ASPEN,
+	]
+
+	var species_variants: Dictionary = {}
+	if DisplayServer.get_name() != "headless":
+		for sp: int in all_species:
+			var v_cnt := _get_species_variant_count(sp)
+			var arr: Array[ArrayMesh] = []
+			for v_idx in range(v_cnt):
+				arr.append(_generate_tree_mesh(sp, 100 + sp * 37 + v_idx * 113))
+			species_variants[sp] = arr
+
+	var transforms_by_key: Dictionary = {}
+	var vista_transforms_by_key: Dictionary = {}
+	for sp: int in all_species:
+		for v_idx in range(_get_species_variant_count(sp)):
+			var k_str := "%d_%d" % [sp, v_idx]
+			transforms_by_key[k_str] = []
+			vista_transforms_by_key[k_str] = []
+
+	var placed_trees: Array[Vector2] = []
+	_place_playable_zone_trees(rng, placed_trees, transforms_by_key, trunk_bodies)
+
 	# Г) Дремучий многоярусный лес со всех 4 сторон карты и по углам (от ±87.8 до ±315 м по лесистым холмам)
 	if DisplayServer.get_name() != "headless":
 		_populate_primeval_border_forest(transforms_by_key, vista_transforms_by_key)
@@ -269,6 +326,126 @@ static func _build_trees_and_trunks(parent: Node3D, rng: RandomNumberGenerator) 
 					false,
 					72.0
 				)
+	return placed_trees
+
+
+static func _build_trees_and_trunks_async(
+	parent: Node3D,
+	rng: RandomNumberGenerator,
+	tree: SceneTree,
+	progress_cb: Callable = Callable()
+) -> Array[Vector2]:
+	var trunk_bodies := StaticBody3D.new()
+	trunk_bodies.name = "TreeTrunkColliders"
+	trunk_bodies.collision_layer = 1
+	trunk_bodies.collision_mask = 0
+	parent.add_child(trunk_bodies)
+
+	var all_species: Array[int] = [
+		TreeSpecies.BIRCH, TreeSpecies.PINE, TreeSpecies.SPRUCE,
+		TreeSpecies.ORCHARD, TreeSpecies.OAK, TreeSpecies.MAPLE, TreeSpecies.ASPEN,
+	]
+
+	var total_variants := 0
+	for sp: int in all_species:
+		total_variants += _get_species_variant_count(sp)
+
+	var species_variants: Dictionary = {}
+	var built_v := 0
+	var frame_t := Time.get_ticks_msec()
+	if DisplayServer.get_name() != "headless":
+		for sp: int in all_species:
+			var v_cnt := _get_species_variant_count(sp)
+			var arr: Array[ArrayMesh] = []
+			for v_idx in range(v_cnt):
+				arr.append(_generate_tree_mesh(sp, 100 + sp * 37 + v_idx * 113))
+				built_v += 1
+				if progress_cb.is_valid():
+					progress_cb.call(lerpf(0.0, 0.58, float(built_v) / float(total_variants)))
+				if Time.get_ticks_msec() - frame_t >= 14:
+					await tree.process_frame
+					frame_t = Time.get_ticks_msec()
+			species_variants[sp] = arr
+
+	var transforms_by_key: Dictionary = {}
+	var vista_transforms_by_key: Dictionary = {}
+	var border_near: Dictionary = {}
+	for sp: int in all_species:
+		for v_idx in range(_get_species_variant_count(sp)):
+			var k_str := "%d_%d" % [sp, v_idx]
+			transforms_by_key[k_str] = []
+			vista_transforms_by_key[k_str] = []
+			border_near[k_str] = []
+
+	# Запускаем расчёт внешнего дремучего леса (88..315 м) в фоновом потоке параллельно с расстановкой центра!
+	var border_tid := -1
+	var border_state := {"near": border_near, "vista": vista_transforms_by_key}
+	if DisplayServer.get_name() != "headless":
+		border_tid = WorkerThreadPool.add_task(_worker_compute_border_forest.bind(border_state))
+
+	var placed_trees: Array[Vector2] = []
+	_place_playable_zone_trees(rng, placed_trees, transforms_by_key, trunk_bodies)
+	if progress_cb.is_valid():
+		progress_cb.call(0.68)
+	await tree.process_frame
+
+	if border_tid != -1:
+		while not WorkerThreadPool.is_task_completed(border_tid):
+			await tree.process_frame
+		WorkerThreadPool.wait_for_task_completion(border_tid)
+		for k_str in border_near.keys():
+			(transforms_by_key[k_str] as Array).append_array(border_near[k_str] as Array)
+
+	_populate_fallen_logs_and_stumps(parent, trunk_bodies, rng)
+	if progress_cb.is_valid():
+		progress_cb.call(0.78)
+	await tree.process_frame
+
+	if DisplayServer.get_name() == "headless":
+		return placed_trees
+
+	var trees_group := Node3D.new()
+	trees_group.name = "ForestTreeChunks"
+	parent.add_child(trees_group)
+
+	var vista_group := Node3D.new()
+	vista_group.name = "OuterPrimevalForestVista"
+	parent.add_child(vista_group)
+
+	frame_t = Time.get_ticks_msec()
+	var done_mm := 0
+	for sp: int in all_species:
+		var v_cnt := _get_species_variant_count(sp)
+		for v_idx in range(v_cnt):
+			var key := "%d_%d" % [sp, v_idx]
+			var xforms: Array = transforms_by_key[key]
+			if not xforms.is_empty():
+				_add_multimesh_batch(
+					trees_group,
+					"Trees_Sp%d_V%d" % [sp, v_idx],
+					species_variants[sp][v_idx],
+					xforms,
+					260.0,
+					true,
+					50.0
+				)
+			var vista_xf: Array = vista_transforms_by_key[key]
+			if not vista_xf.is_empty():
+				_add_multimesh_batch(
+					vista_group,
+					"VistaTrees_Sp%d_V%d" % [sp, v_idx],
+					species_variants[sp][v_idx],
+					vista_xf,
+					390.0,
+					false,
+					72.0
+				)
+			done_mm += 1
+			if progress_cb.is_valid():
+				progress_cb.call(lerpf(0.78, 1.0, float(done_mm) / float(total_variants)))
+			if Time.get_ticks_msec() - frame_t >= 14:
+				await tree.process_frame
+				frame_t = Time.get_ticks_msec()
 	return placed_trees
 
 
@@ -1033,6 +1210,17 @@ static func _append_curved_bough_card(
 # ============================================================================
 
 static func _load_image_any(res_path: String) -> Image:
+	if _raw_image_cache.has(res_path):
+		return _raw_image_cache[res_path]
+	if AssetCatalog._texture_cache.has(res_path):
+		var cached_tex: Texture2D = AssetCatalog._texture_cache[res_path]
+		if cached_tex != null:
+			var c_img := cached_tex.get_image()
+			if c_img != null and not c_img.is_empty():
+				if c_img.is_compressed():
+					c_img.decompress()
+				_raw_image_cache[res_path] = c_img
+				return c_img
 	if ResourceLoader.exists(res_path):
 		var tex := load(res_path)
 		if tex is Texture2D:
@@ -1040,17 +1228,20 @@ static func _load_image_any(res_path: String) -> Image:
 			if img != null and not img.is_empty():
 				if img.is_compressed():
 					img.decompress()
+				_raw_image_cache[res_path] = img
 				return img
 	var abs_p := ProjectSettings.globalize_path(res_path)
 	if FileAccess.file_exists(abs_p):
-		return Image.load_from_file(abs_p)
+		var f_img := Image.load_from_file(abs_p)
+		if f_img != null and not f_img.is_empty():
+			_raw_image_cache[res_path] = f_img
+			return f_img
 	return null
 
 
 static func _get_spray_res_mult() -> int:
-	var probe := AssetCatalog._load_texture_safe("res://assets/downloaded/textures/oak_leaf/diff.jpg")
-	if probe != null and probe.get_width() >= 2048:
-		return 2
+	# 1024×1024 на ветвь 1.8 м даёт >550 текселей/м (выше предела экранного разрешения камеры от 3-го лица),
+	# ускоряя процедурную сборку и загрузку мип-уровней в 4 раза без какой-либо потери чёткости!
 	return 1
 
 
@@ -1064,8 +1255,28 @@ static func _extract_rgba_crop(
 	mask_pine_corner: bool = false,
 	unpremultiply_black: bool = true
 ) -> Image:
-	var d_img := _load_image_any(diff_path)
-	var a_img := _load_image_any(alpha_path)
+	return _extract_rgba_crop_from_images(
+		_load_image_any(diff_path),
+		_load_image_any(alpha_path),
+		uv_rect,
+		target_w,
+		target_h,
+		bleed_rgb,
+		mask_pine_corner,
+		unpremultiply_black
+	)
+
+
+static func _extract_rgba_crop_from_images(
+	d_img: Image,
+	a_img: Image,
+	uv_rect: Rect2,
+	target_w: int,
+	target_h: int,
+	bleed_rgb: Color,
+	mask_pine_corner: bool = false,
+	unpremultiply_black: bool = true
+) -> Image:
 	if d_img == null or a_img == null or d_img.is_empty() or a_img.is_empty():
 		var fallback := Image.create(target_w, target_h, false, Image.FORMAT_RGBA8)
 		fallback.fill(Color(bleed_rgb.r, bleed_rgb.g, bleed_rgb.b, 0.0))
@@ -1087,20 +1298,23 @@ static func _extract_rgba_crop(
 	ac.resize(target_w, target_h, Image.INTERPOLATE_BILINEAR)
 
 	var out := Image.create(target_w, target_h, false, Image.FORMAT_RGBA8)
+	var bleed_zero := Color(bleed_rgb.r, bleed_rgb.g, bleed_rgb.b, 0.0)
+	var bleed_boost := Color(bleed_rgb.r * 1.12, bleed_rgb.g * 1.12, bleed_rgb.b * 1.12, 1.0)
+	var inv_tw := 1.0 / float(target_w)
 	for y in range(target_h):
 		var v_norm := float(y) / float(target_h)
+		var check_pine := mask_pine_corner and v_norm > 0.80
 		for x in range(target_w):
 			var a := ac.get_pixel(x, y).r
-			if mask_pine_corner and v_norm > 0.80:
-				var u_norm := float(x) / float(target_w)
+			if check_pine:
+				var u_norm := float(x) * inv_tw
 				if u_norm < 0.24 or u_norm > 0.76:
 					a = 0.0
 			if a < 0.16:
-				out.set_pixel(x, y, Color(bleed_rgb.r, bleed_rgb.g, bleed_rgb.b, 0.0))
+				out.set_pixel(x, y, bleed_zero)
 			else:
 				var c := dc.get_pixel(x, y)
 				var max_ch := maxf(c.r, maxf(c.g, c.b))
-				# Снимаем чёрный фон ТОЛЬКО если пиксель реально затемнён чёрной подложкой (не превращая светлые края LeafSet005/016 в белую кайму 1.0!)
 				var inv := 1.0
 				if unpremultiply_black and max_ch < (0.30 * a + 0.06):
 					inv = 1.0 / maxf(a, 0.42)
@@ -1110,10 +1324,9 @@ static func _extract_rgba_crop(
 					clampf(c.b * inv, 0.0, 1.0),
 					1.0
 				)
-				# Убираем белёсую фотограмметрическую кайму на полупрозрачных краях листа, чтобы мип-уровни вдали оставались насыщенно-зелёными!
 				if a < 0.68 and (rgb.r > 0.36 or rgb.b > 0.28):
 					var edge_fix := (1.0 - smoothstep(0.16, 0.68, a)) * 0.85
-					rgb = rgb.lerp(Color(bleed_rgb.r * 1.12, bleed_rgb.g * 1.12, bleed_rgb.b * 1.12, 1.0), edge_fix)
+					rgb = rgb.lerp(bleed_boost, edge_fix)
 				out.set_pixel(x, y, Color(
 					rgb.r,
 					rgb.g,
@@ -1133,21 +1346,24 @@ static func _rotate_rgba_stamp(src: Image, angle_rad: float, bleed_rgb: Color) -
 	var dst := Image.create(dw, dh, false, Image.FORMAT_RGBA8)
 	dst.fill(Color(bleed_rgb.r, bleed_rgb.g, bleed_rgb.b, 0.0))
 
-	var cx := float(sw) * 0.5
-	var cy := float(sh) * 0.5
+	var cx := float(sw) * 0.5 + 0.5
+	var cy := float(sh) * 0.5 + 0.5
 	var dcx := float(dw) * 0.5
 	var dcy := float(dh) * 0.5
 
 	for dy in range(dh):
 		var ry := float(dy) - dcy
+		var sx_f := -dcx * cs + ry * sn + cx
+		var sy_f := dcx * sn + ry * cs + cy
 		for dx in range(dw):
-			var rx := float(dx) - dcx
-			var sx := int(round(rx * cs + ry * sn + cx))
-			var sy := int(round(-rx * sn + ry * cs + cy))
+			var sx := floori(sx_f)
+			var sy := floori(sy_f)
 			if sx >= 0 and sx < sw and sy >= 0 and sy < sh:
 				var p := src.get_pixel(sx, sy)
 				if p.a > 0.05:
 					dst.set_pixel(dx, dy, p)
+			sx_f += cs
+			sy_f -= sn
 	return dst
 
 
@@ -1167,13 +1383,13 @@ static func _stamp_centered(canvas: Image, stamp: Image, center: Vector2i) -> vo
 	canvas.blit_rect_mask(stamp, stamp, Rect2i(0, 0, sw, sh), dst_pt)
 
 
-static func _build_deciduous_branch_spray(
+static func _build_deciduous_branch_spray_image(
 	stamps_up: Array[Image],
 	bleed: Color,
 	wood_col: Color,
 	res_m: int,
 	is_oak_clustered: bool = false
-) -> Texture2D:
+) -> Image:
 	var m := float(res_m)
 	var base_img: Image = stamps_up[0]
 	var alt_img: Image = stamps_up[1 % stamps_up.size()]
@@ -1240,79 +1456,200 @@ static func _build_deciduous_branch_spray(
 		_stamp_centered(canvas, c_pt[1], Vector2i(int(p_scaled.x), int(p_scaled.y)))
 
 	canvas.generate_mipmaps()
-	return ImageTexture.create_from_image(canvas)
+	return canvas
 
 
-static func _get_birch_spray_texture() -> Texture2D:
-	if _birch_spray_tex != null:
-		return _birch_spray_tex
-	var rm := _get_spray_res_mult()
-	var bleed := Color(0.22, 0.34, 0.09, 0.0)
-	var t0 := _extract_rgba_crop("res://assets/downloaded/textures/leaf_twig/diff.jpg", "res://assets/downloaded/textures/leaf_twig/alpha.jpg", Rect2(0.014, 0.006, 0.400, 0.984), 136 * rm, 168 * rm, bleed, false, true)
-	var t1 := t0.duplicate() as Image
-	t1.flip_x()
-	_birch_spray_tex = _build_deciduous_branch_spray([t0, t1, t0], bleed, Color(0.26, 0.20, 0.15, 1.0), rm, false)
-	return _birch_spray_tex
+static func _get_foliage_cache_path(key: String, rm: int) -> String:
+	return "%s/%s_rm%d.bin" % [FOLIAGE_CACHE_DIR, key, rm]
 
 
-static func _get_orchard_spray_texture() -> Texture2D:
-	if _orchard_spray_tex != null:
-		return _orchard_spray_tex
-	var rm := _get_spray_res_mult()
-	var bleed := Color(0.18, 0.31, 0.08, 0.0)
-	var t0 := _extract_rgba_crop("res://assets/downloaded/textures/leaf_twig/diff.jpg", "res://assets/downloaded/textures/leaf_twig/alpha.jpg", Rect2(0.014, 0.006, 0.400, 0.984), 168 * rm, 206 * rm, bleed, false, true)
-	var t1 := t0.duplicate() as Image
-	t1.flip_x()
-	_orchard_spray_tex = _build_deciduous_branch_spray([t0, t1, t0], bleed, Color(0.24, 0.18, 0.13, 1.0), rm, false)
-	return _orchard_spray_tex
+static func _load_cached_foliage_image(key: String, rm: int) -> Image:
+	var p := _get_foliage_cache_path(key, rm)
+	if not FileAccess.file_exists(p):
+		return null
+	var f := FileAccess.open(p, FileAccess.READ)
+	if f == null:
+		return null
+	if f.get_length() < 24:
+		return null
+	var magic := int(f.get_32())
+	if magic != FOLIAGE_CACHE_MAGIC:
+		return null
+	var w := int(f.get_32())
+	var h := int(f.get_32())
+	var fmt := int(f.get_32())
+	var has_mips := int(f.get_32()) != 0
+	var data_len := int(f.get_32())
+	if w <= 0 or h <= 0 or data_len <= 0 or f.get_position() + data_len > f.get_length():
+		return null
+	var raw := f.get_buffer(data_len)
+	if raw.size() != data_len:
+		return null
+	return Image.create_from_data(w, h, has_mips, fmt as Image.Format, raw)
 
 
-static func _get_oak_spray_texture() -> Texture2D:
-	if _oak_spray_tex != null:
-		return _oak_spray_tex
-	var rm := _get_spray_res_mult()
-	var bleed := Color(0.18, 0.28, 0.08, 0.0)
-	var o0 := _extract_rgba_crop("res://assets/downloaded/textures/oak_leaf/diff.jpg", "res://assets/downloaded/textures/oak_leaf/alpha.jpg", Rect2(0.025, 0.020, 0.265, 0.450), 132 * rm, 210 * rm, bleed, false, true)
-	var o1 := _extract_rgba_crop("res://assets/downloaded/textures/oak_leaf/diff.jpg", "res://assets/downloaded/textures/oak_leaf/alpha.jpg", Rect2(0.020, 0.540, 0.315, 0.435), 152 * rm, 205 * rm, bleed, false, true)
-	var o2 := _extract_rgba_crop("res://assets/downloaded/textures/oak_leaf/diff.jpg", "res://assets/downloaded/textures/oak_leaf/alpha.jpg", Rect2(0.365, 0.555, 0.285, 0.415), 140 * rm, 198 * rm, bleed, false, true)
-	_oak_spray_tex = _build_deciduous_branch_spray([o0, o1, o2], bleed, Color(0.22, 0.16, 0.11, 1.0), rm, true)
-	return _oak_spray_tex
+static func _save_cached_foliage_image(key: String, rm: int, img: Image) -> void:
+	if img == null or img.is_empty():
+		return
+	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(FOLIAGE_CACHE_DIR))
+	var f := FileAccess.open(_get_foliage_cache_path(key, rm), FileAccess.WRITE)
+	if f == null:
+		return
+	var raw := img.get_data()
+	f.store_32(FOLIAGE_CACHE_MAGIC)
+	f.store_32(img.get_width())
+	f.store_32(img.get_height())
+	f.store_32(int(img.get_format()))
+	f.store_32(1 if img.has_mipmaps() else 0)
+	f.store_32(raw.size())
+	f.store_buffer(raw)
 
 
-static func _get_maple_spray_texture() -> Texture2D:
-	if _maple_spray_tex != null:
-		return _maple_spray_tex
-	var rm := _get_spray_res_mult()
-	var bleed := Color(0.24, 0.34, 0.09, 0.0)
-	var m0 := _extract_rgba_crop("res://assets/downloaded/textures/maple_leaf/diff.jpg", "res://assets/downloaded/textures/maple_leaf/alpha.jpg", Rect2(0.045, 0.030, 0.440, 0.445), 176 * rm, 182 * rm, bleed, false, true)
-	var m1 := _extract_rgba_crop("res://assets/downloaded/textures/maple_leaf/diff.jpg", "res://assets/downloaded/textures/maple_leaf/alpha.jpg", Rect2(0.055, 0.485, 0.405, 0.495), 168 * rm, 192 * rm, bleed, false, true)
-	# Августовский кленовый лист с первыми золотисто-оранжевыми прожилками (LeafSet027 — фон уже дилатирован!)
-	var m_aug := _extract_rgba_crop("res://assets/downloaded/textures/maple_aug_leaf/diff.jpg", "res://assets/downloaded/textures/maple_aug_leaf/alpha.jpg", Rect2(0.350, 0.015, 0.300, 0.305), 172 * rm, 178 * rm, bleed, false, false)
-	_maple_spray_tex = _build_deciduous_branch_spray([m0, m1, m_aug], bleed, Color(0.25, 0.18, 0.13, 1.0), rm, false)
-	return _maple_spray_tex
+static func _get_required_source_paths_for_key(key: String) -> PackedStringArray:
+	match key:
+		"birch", "orchard":
+			return PackedStringArray([
+				"res://assets/downloaded/textures/leaf_twig/diff.jpg",
+				"res://assets/downloaded/textures/leaf_twig/alpha.jpg",
+			])
+		"oak":
+			return PackedStringArray([
+				"res://assets/downloaded/textures/oak_leaf/diff.jpg",
+				"res://assets/downloaded/textures/oak_leaf/alpha.jpg",
+			])
+		"maple":
+			return PackedStringArray([
+				"res://assets/downloaded/textures/maple_leaf/diff.jpg",
+				"res://assets/downloaded/textures/maple_leaf/alpha.jpg",
+				"res://assets/downloaded/textures/maple_aug_leaf/diff.jpg",
+				"res://assets/downloaded/textures/maple_aug_leaf/alpha.jpg",
+			])
+		"aspen":
+			return PackedStringArray([
+				"res://assets/downloaded/textures/aspen_leaf/diff.jpg",
+				"res://assets/downloaded/textures/aspen_leaf/alpha.jpg",
+			])
+		"pine":
+			return PackedStringArray([
+				"res://assets/downloaded/textures/pine_twig/diff.jpg",
+				"res://assets/downloaded/textures/pine_twig/alpha.jpg",
+			])
+		"spruce":
+			return PackedStringArray([
+				"res://assets/downloaded/textures/fir_twig/diff.jpg",
+				"res://assets/downloaded/textures/fir_twig/alpha.jpg",
+			])
+		"stalks":
+			return PackedStringArray([
+				"res://assets/downloaded/textures/meadow_stalks/diff.jpg",
+				"res://assets/downloaded/textures/meadow_stalks/alpha.jpg",
+			])
+	return PackedStringArray()
 
 
-static func _get_aspen_spray_texture() -> Texture2D:
-	if _aspen_spray_tex != null:
-		return _aspen_spray_tex
-	var rm := _get_spray_res_mult()
-	var bleed := Color(0.20, 0.33, 0.11, 0.0)
-	var a0 := _extract_rgba_crop("res://assets/downloaded/textures/aspen_leaf/diff.jpg", "res://assets/downloaded/textures/aspen_leaf/alpha.jpg", Rect2(0.035, 0.005, 0.270, 0.330), 126 * rm, 156 * rm, bleed, false, false)
-	var a1 := _extract_rgba_crop("res://assets/downloaded/textures/aspen_leaf/diff.jpg", "res://assets/downloaded/textures/aspen_leaf/alpha.jpg", Rect2(0.375, 0.005, 0.250, 0.325), 122 * rm, 152 * rm, bleed, false, false)
-	var a2 := _extract_rgba_crop("res://assets/downloaded/textures/aspen_leaf/diff.jpg", "res://assets/downloaded/textures/aspen_leaf/alpha.jpg", Rect2(0.040, 0.338, 0.255, 0.325), 124 * rm, 154 * rm, bleed, false, false)
-	_aspen_spray_tex = _build_deciduous_branch_spray([a0, a1, a2], bleed, Color(0.27, 0.26, 0.20, 1.0), rm, false)
-	return _aspen_spray_tex
+static func _get_cached_tex_by_key(key: String) -> Texture2D:
+	match key:
+		"birch": return _birch_spray_tex
+		"orchard": return _orchard_spray_tex
+		"oak": return _oak_spray_tex
+		"maple": return _maple_spray_tex
+		"aspen": return _aspen_spray_tex
+		"pine": return _pine_bough_tex
+		"spruce": return _spruce_bough_tex
+		"stalks": return _meadow_stalk_sheaf_tex
+	return null
 
 
-static func _get_pine_bough_texture() -> Texture2D:
-	if _pine_bough_tex != null:
-		return _pine_bough_tex
-	var rm := _get_spray_res_mult()
+static func _set_cached_tex_by_key(key: String, tex: Texture2D) -> void:
+	match key:
+		"birch": _birch_spray_tex = tex
+		"orchard": _orchard_spray_tex = tex
+		"oak": _oak_spray_tex = tex
+		"maple": _maple_spray_tex = tex
+		"aspen": _aspen_spray_tex = tex
+		"pine": _pine_bough_tex = tex
+		"spruce": _spruce_bough_tex = tex
+		"stalks": _meadow_stalk_sheaf_tex = tex
+
+
+## Чистая потокобезопасная сборка RGBA8-атласа в WorkerThreadPool (работает только с изолированными Image в памяти!).
+static func _worker_build_atlas_image(state: Dictionary) -> void:
+	var key := String(state["key"])
+	var rm := int(state["rm"])
+	var sources: Dictionary = state["sources"]
+	var out_img: Image = null
+
+	match key:
+		"birch":
+			var bleed := Color(0.22, 0.34, 0.09, 0.0)
+			var t0 := _extract_rgba_crop_from_images(sources.get("res://assets/downloaded/textures/leaf_twig/diff.jpg"), sources.get("res://assets/downloaded/textures/leaf_twig/alpha.jpg"), Rect2(0.014, 0.006, 0.400, 0.984), 136 * rm, 168 * rm, bleed, false, true)
+			var t1 := t0.duplicate() as Image
+			t1.flip_x()
+			out_img = _build_deciduous_branch_spray_image([t0, t1, t0], bleed, Color(0.26, 0.20, 0.15, 1.0), rm, false)
+
+		"orchard":
+			var bleed2 := Color(0.18, 0.31, 0.08, 0.0)
+			var ot0 := _extract_rgba_crop_from_images(sources.get("res://assets/downloaded/textures/leaf_twig/diff.jpg"), sources.get("res://assets/downloaded/textures/leaf_twig/alpha.jpg"), Rect2(0.014, 0.006, 0.400, 0.984), 168 * rm, 206 * rm, bleed2, false, true)
+			var ot1 := ot0.duplicate() as Image
+			ot1.flip_x()
+			out_img = _build_deciduous_branch_spray_image([ot0, ot1, ot0], bleed2, Color(0.24, 0.18, 0.13, 1.0), rm, false)
+
+		"oak":
+			var bleed3 := Color(0.18, 0.28, 0.08, 0.0)
+			var od: Image = sources.get("res://assets/downloaded/textures/oak_leaf/diff.jpg")
+			var oa: Image = sources.get("res://assets/downloaded/textures/oak_leaf/alpha.jpg")
+			var o0 := _extract_rgba_crop_from_images(od, oa, Rect2(0.025, 0.020, 0.265, 0.450), 132 * rm, 210 * rm, bleed3, false, true)
+			var o1 := _extract_rgba_crop_from_images(od, oa, Rect2(0.020, 0.540, 0.315, 0.435), 152 * rm, 205 * rm, bleed3, false, true)
+			var o2 := _extract_rgba_crop_from_images(od, oa, Rect2(0.365, 0.555, 0.285, 0.415), 140 * rm, 198 * rm, bleed3, false, true)
+			out_img = _build_deciduous_branch_spray_image([o0, o1, o2], bleed3, Color(0.22, 0.16, 0.11, 1.0), rm, true)
+
+		"maple":
+			var bleed4 := Color(0.24, 0.34, 0.09, 0.0)
+			var md: Image = sources.get("res://assets/downloaded/textures/maple_leaf/diff.jpg")
+			var ma: Image = sources.get("res://assets/downloaded/textures/maple_leaf/alpha.jpg")
+			var m0 := _extract_rgba_crop_from_images(md, ma, Rect2(0.045, 0.030, 0.440, 0.445), 176 * rm, 182 * rm, bleed4, false, true)
+			var m1 := _extract_rgba_crop_from_images(md, ma, Rect2(0.055, 0.485, 0.405, 0.495), 168 * rm, 192 * rm, bleed4, false, true)
+			var m_aug := _extract_rgba_crop_from_images(sources.get("res://assets/downloaded/textures/maple_aug_leaf/diff.jpg"), sources.get("res://assets/downloaded/textures/maple_aug_leaf/alpha.jpg"), Rect2(0.350, 0.015, 0.300, 0.305), 172 * rm, 178 * rm, bleed4, false, false)
+			out_img = _build_deciduous_branch_spray_image([m0, m1, m_aug], bleed4, Color(0.25, 0.18, 0.13, 1.0), rm, false)
+
+		"aspen":
+			var bleed5 := Color(0.20, 0.33, 0.11, 0.0)
+			var ad: Image = sources.get("res://assets/downloaded/textures/aspen_leaf/diff.jpg")
+			var aa: Image = sources.get("res://assets/downloaded/textures/aspen_leaf/alpha.jpg")
+			var a0 := _extract_rgba_crop_from_images(ad, aa, Rect2(0.035, 0.005, 0.270, 0.330), 126 * rm, 156 * rm, bleed5, false, false)
+			var a1 := _extract_rgba_crop_from_images(ad, aa, Rect2(0.375, 0.005, 0.250, 0.325), 122 * rm, 152 * rm, bleed5, false, false)
+			var a2 := _extract_rgba_crop_from_images(ad, aa, Rect2(0.040, 0.338, 0.255, 0.325), 124 * rm, 154 * rm, bleed5, false, false)
+			out_img = _build_deciduous_branch_spray_image([a0, a1, a2], bleed5, Color(0.27, 0.26, 0.20, 1.0), rm, false)
+
+		"pine":
+			out_img = _build_pine_bough_image(
+				sources.get("res://assets/downloaded/textures/pine_twig/diff.jpg"),
+				sources.get("res://assets/downloaded/textures/pine_twig/alpha.jpg"),
+				rm
+			)
+
+		"spruce":
+			out_img = _build_spruce_bough_image(
+				sources.get("res://assets/downloaded/textures/fir_twig/diff.jpg"),
+				sources.get("res://assets/downloaded/textures/fir_twig/alpha.jpg"),
+				rm
+			)
+
+		"stalks":
+			out_img = _build_stalks_atlas_image(
+				sources.get("res://assets/downloaded/textures/meadow_stalks/diff.jpg"),
+				sources.get("res://assets/downloaded/textures/meadow_stalks/alpha.jpg"),
+				rm
+			)
+
+	state["out_img"] = out_img
+
+
+static func _build_pine_bough_image(d_img: Image, a_img: Image, rm: int) -> Image:
 	var m := float(rm)
 	var bleed := Color(0.14, 0.24, 0.08, 0.0)
-	var shoot0 := _extract_rgba_crop(
-		"res://assets/downloaded/textures/pine_twig/diff.jpg",
-		"res://assets/downloaded/textures/pine_twig/alpha.jpg",
+	var shoot0 := _extract_rgba_crop_from_images(
+		d_img, a_img,
 		Rect2(0.028, 0.038, 0.192, 0.398),
 		148 * rm, 296 * rm, bleed, true, true
 	)
@@ -1352,24 +1689,16 @@ static func _get_pine_bough_texture() -> Texture2D:
 		_stamp_centered(canvas, st_spec[1], Vector2i(int(ps.x), int(ps.y)))
 
 	canvas.generate_mipmaps()
-	_pine_bough_tex = ImageTexture.create_from_image(canvas)
-	return _pine_bough_tex
+	return canvas
 
 
-## Очищенная текстура еловой лапы (fir_twig): удаляет серо-оливковый фон вокруг хвоинок,
-## из-за которого на дальних mipmap-уровнях (88..300 м) ели приобретали белёсо-седой налёт.
-static func _get_spruce_bough_texture() -> Texture2D:
-	if _spruce_bough_tex != null:
-		return _spruce_bough_tex
+static func _build_spruce_bough_image(d_img: Image, a_img: Image, rm: int) -> Image:
 	var bleed := Color(0.11, 0.22, 0.07, 0.0)
-	var d_img := _load_image_any("res://assets/downloaded/textures/fir_twig/diff.jpg")
-	var a_img := _load_image_any("res://assets/downloaded/textures/fir_twig/alpha.jpg")
-	var sz := 768 * _get_spray_res_mult()
+	var sz := 768 * rm
 	if d_img == null or a_img == null or d_img.is_empty() or a_img.is_empty():
 		var fallback := Image.create(64, 64, true, Image.FORMAT_RGBA8)
 		fallback.fill(Color(0.14, 0.26, 0.09, 1.0))
-		_spruce_bough_tex = ImageTexture.create_from_image(fallback)
-		return _spruce_bough_tex
+		return fallback
 
 	var dc := d_img.duplicate() as Image
 	var ac := a_img.duplicate() as Image
@@ -1392,8 +1721,180 @@ static func _get_spruce_bough_texture() -> Texture2D:
 				out.set_pixel(x, y, Color(c.r * 0.88, c.g * 0.96, c.b * 0.78, boosted_a))
 
 	out.generate_mipmaps()
-	_spruce_bough_tex = ImageTexture.create_from_image(out)
-	return _spruce_bough_tex
+	return out
+
+
+static func _get_or_build_atlas_sync(key: String) -> Texture2D:
+	var mem := _get_cached_tex_by_key(key)
+	if mem != null:
+		return mem
+	if _active_atlas_tasks.has(key):
+		var task_info: Dictionary = _active_atlas_tasks[key]
+		WorkerThreadPool.wait_for_task_completion(int(task_info["tid"]))
+		var ready_img: Image = (task_info["state"] as Dictionary).get("out_img")
+		_active_atlas_tasks.erase(key)
+		if ready_img != null:
+			_save_cached_foliage_image(key, _get_spray_res_mult(), ready_img)
+			var ready_tex := ImageTexture.create_from_image(ready_img)
+			_set_cached_tex_by_key(key, ready_tex)
+			return ready_tex
+
+	var rm := _get_spray_res_mult()
+	var disk_img := _load_cached_foliage_image(key, rm)
+	if disk_img != null:
+		var disk_tex := ImageTexture.create_from_image(disk_img)
+		_set_cached_tex_by_key(key, disk_tex)
+		return disk_tex
+
+	var sources: Dictionary = {}
+	for sp in _get_required_source_paths_for_key(key):
+		var im := _load_image_any(sp)
+		if im != null:
+			sources[sp] = im
+	var state := {"key": key, "rm": rm, "sources": sources}
+	_worker_build_atlas_image(state)
+	var built_img: Image = state.get("out_img")
+	if built_img == null:
+		built_img = Image.create(64, 64, true, Image.FORMAT_RGBA8)
+	_save_cached_foliage_image(key, rm, built_img)
+	var built_tex := ImageTexture.create_from_image(built_img)
+	_set_cached_tex_by_key(key, built_tex)
+	return built_tex
+
+
+## Параллельная фоновая сборка и дисковое кэширование всех RGBA8-атласов ветвей/колосьев (WorkerThreadPool + user://).
+static func prepare_foliage_textures_async(
+	tree: SceneTree,
+	keys: PackedStringArray = PackedStringArray(),
+	progress_cb: Callable = Callable(),
+	cancel_check: Callable = Callable()
+) -> void:
+	var target_keys: Array[String] = []
+	if keys.is_empty():
+		target_keys.assign(ALL_FOLIAGE_TEX_KEYS)
+	else:
+		for k in keys:
+			target_keys.append(String(k))
+
+	var total := target_keys.size()
+	if total == 0:
+		if progress_cb.is_valid():
+			progress_cb.call(1.0)
+		return
+
+	var rm := _get_spray_res_mult()
+	var done_count := 0
+	var to_generate: Array[String] = []
+	var frame_t := Time.get_ticks_msec()
+
+	for k in target_keys:
+		if cancel_check.is_valid() and bool(cancel_check.call()):
+			return
+		if _get_cached_tex_by_key(k) != null:
+			done_count += 1
+			continue
+		if not _active_atlas_tasks.has(k):
+			var disk_img := _load_cached_foliage_image(k, rm)
+			if disk_img != null:
+				_set_cached_tex_by_key(k, ImageTexture.create_from_image(disk_img))
+				done_count += 1
+				if progress_cb.is_valid():
+					progress_cb.call(float(done_count) / float(total))
+				if Time.get_ticks_msec() - frame_t >= 12:
+					await tree.process_frame
+					frame_t = Time.get_ticks_msec()
+				continue
+		to_generate.append(k)
+
+	if to_generate.is_empty():
+		if progress_cb.is_valid():
+			progress_cb.call(1.0)
+		return
+
+	# Декодируем исходные 4K-текстуры на главном потоке с отдачей кадров и запускаем параллельные задачи в WorkerThreadPool
+	for k in to_generate:
+		if cancel_check.is_valid() and bool(cancel_check.call()):
+			return
+		if _active_atlas_tasks.has(k):
+			continue
+		var src_copy: Dictionary = {}
+		for sp in _get_required_source_paths_for_key(k):
+			var raw_im := _load_image_any(sp)
+			if raw_im != null:
+				src_copy[sp] = raw_im.duplicate()
+			if Time.get_ticks_msec() - frame_t >= 12:
+				await tree.process_frame
+				frame_t = Time.get_ticks_msec()
+				if cancel_check.is_valid() and bool(cancel_check.call()):
+					return
+		var state := {"key": k, "rm": rm, "sources": src_copy}
+		var tid := WorkerThreadPool.add_task(_worker_build_atlas_image.bind(state))
+		_active_atlas_tasks[k] = {"tid": tid, "state": state}
+
+	var waiting: Array[String] = to_generate.duplicate()
+	while not waiting.is_empty():
+		if cancel_check.is_valid() and bool(cancel_check.call()):
+			return
+		var finalized_this_frame := false
+		var i := 0
+		while i < waiting.size():
+			var k: String = waiting[i]
+			if _get_cached_tex_by_key(k) != null:
+				waiting.remove_at(i)
+				done_count += 1
+				continue
+			var info: Dictionary = _active_atlas_tasks.get(k, {})
+			if info.is_empty():
+				waiting.remove_at(i)
+				done_count += 1
+				continue
+			var tid := int(info["tid"])
+			if WorkerThreadPool.is_task_completed(tid) and not finalized_this_frame:
+				WorkerThreadPool.wait_for_task_completion(tid)
+				var out_img: Image = (info["state"] as Dictionary).get("out_img")
+				_active_atlas_tasks.erase(k)
+				if out_img != null:
+					_save_cached_foliage_image(k, rm, out_img)
+					_set_cached_tex_by_key(k, ImageTexture.create_from_image(out_img))
+				waiting.remove_at(i)
+				done_count += 1
+				finalized_this_frame = true
+				continue
+			i += 1
+
+		if progress_cb.is_valid():
+			progress_cb.call(clampf(float(done_count) / float(total), 0.0, 1.0))
+
+		if not waiting.is_empty():
+			await tree.process_frame
+
+
+static func _get_birch_spray_texture() -> Texture2D:
+	return _get_or_build_atlas_sync("birch")
+
+
+static func _get_orchard_spray_texture() -> Texture2D:
+	return _get_or_build_atlas_sync("orchard")
+
+
+static func _get_oak_spray_texture() -> Texture2D:
+	return _get_or_build_atlas_sync("oak")
+
+
+static func _get_maple_spray_texture() -> Texture2D:
+	return _get_or_build_atlas_sync("maple")
+
+
+static func _get_aspen_spray_texture() -> Texture2D:
+	return _get_or_build_atlas_sync("aspen")
+
+
+static func _get_pine_bough_texture() -> Texture2D:
+	return _get_or_build_atlas_sync("pine")
+
+
+static func _get_spruce_bough_texture() -> Texture2D:
+	return _get_or_build_atlas_sync("spruce")
 
 
 static func _get_flat_normal_texture() -> Texture2D:
@@ -1823,26 +2324,10 @@ static func _assign_foliage_textures(sm: ShaderMaterial, tex_folder: String) -> 
 # 2. 6 ВИДОВ ПЫШНЫХ КУСТАРНИКОВ + КРАПИВА, ЧИСТОТЕЛ 4.3K, ПАПОРОТНИК И ОДУВАНЧИКИ 23.5K
 # ============================================================================
 
-static func _build_photoscanned_undergrowth(
-	parent: Node3D,
-	rng: RandomNumberGenerator,
-	placed_trees: Array[Vector2] = []
-) -> void:
-	var shrub1 := AssetCatalog.get_model_submeshes("res://assets/downloaded/models/shrub_01/model.gltf")
-	var shrub2 := AssetCatalog.get_model_submeshes("res://assets/downloaded/models/shrub_02/model.gltf")
-	var shrub3 := AssetCatalog.get_model_submeshes("res://assets/downloaded/models/shrub_03/model.gltf")
-	var shrub4 := AssetCatalog.get_model_submeshes("res://assets/downloaded/models/shrub_04/model.gltf")
-	var periwinkle := AssetCatalog.get_model_submeshes("res://assets/downloaded/models/periwinkle_plant/model.gltf")
-	var weed_bush := AssetCatalog.get_model_submeshes("res://assets/downloaded/models/weed_plant_02/model.gltf")
-	var sorrel := AssetCatalog.get_model_submeshes("res://assets/downloaded/models/shrub_sorrel_01/model.gltf")
-
-	var nettles := AssetCatalog.get_model_submeshes("res://assets/downloaded/models/nettle_plant/model.gltf")
-	var celandines := AssetCatalog.get_model_submeshes("res://assets/downloaded/models/celandine_01/model.gltf")
-	var dandelions := AssetCatalog.get_model_submeshes("res://assets/downloaded/models/dandelion_01/model.gltf")
-	var ferns := AssetCatalog.get_model_submeshes("res://assets/downloaded/models/fern_02/model.gltf")
-	var grass_m1 := AssetCatalog.get_model_submeshes("res://assets/downloaded/models/grass_medium_01/model.gltf")
-	var grass_m2 := AssetCatalog.get_model_submeshes("res://assets/downloaded/models/grass_medium_02/model.gltf")
-	var grass_bermuda := AssetCatalog.get_model_submeshes("res://assets/downloaded/models/grass_bermuda_01/model.gltf")
+static func _worker_compute_undergrowth_transforms(state: Dictionary) -> void:
+	var rng := RandomNumberGenerator.new()
+	rng.seed = int(state["rng_seed"])
+	var placed_trees: Array[Vector2] = state["placed_trees"]
 
 	# А) Лесные и луговые кустарники (shrub_01 156k, shrub_02, shrub_03, shrub_04, бурьян weed_plant_02)
 	var shrub_buckets: Array = [[], [], [], [], []]
@@ -1889,7 +2374,6 @@ static func _build_photoscanned_undergrowth(
 
 	for plot in TerrainBuilder.HOUSE_PLOTS:
 		var c: Vector2 = plot["pos"]
-		# Цветущие палисадниковые кусты у крылец и палисадников домов
 		for _p in range(22):
 			var p_off := Vector2(rng.randf_range(-10.2, 10.2), rng.randf_range(-10.2, 10.2))
 			if absf(p_off.x) < 5.4 and absf(p_off.y) < 4.8:
@@ -1953,14 +2437,12 @@ static func _build_photoscanned_undergrowth(
 		dandelion_mid_xf.append(Transform3D(Basis(Vector3.UP, rng.randf() * TAU).scaled(Vector3(dsc3, dsc3, dsc3)), Vector3(mx, my, mz)))
 
 	# В) Лесные папоротники, цветущие куртинки кислицы (shrub_sorrel_01) и ЖИВОПИСНЫЕ БОТАНИЧЕСКИЕ КЛАСТЕРЫ
-	#    прямо у корней деревьев и вдоль лесных тропинок (куст + папоротник + кислица + дернина с метёлками!)
 	var fern_xf: Array[Transform3D] = []
 	var sorrel_xf: Array[Transform3D] = []
 	var gm1_xf: Array[Transform3D] = []
 	var gm2_xf: Array[Transform3D] = []
 	var bermuda_xf: Array[Transform3D] = []
 
-	# 1) Многоярусные природные группы вокруг стволов деревьев (как в живом смешанном лесу!)
 	for t_idx in range(placed_trees.size()):
 		if rng.randf() > 0.62:
 			continue
@@ -1991,7 +2473,6 @@ static func _build_photoscanned_undergrowth(
 					var so_sc := rng.randf_range(2.05, 2.85)
 					sorrel_xf.append(Transform3D(Basis(Vector3.UP, rng.randf() * TAU).scaled(Vector3.ONE * so_sc), Vector3(fp.x, fy_c - 0.01, fp.y)))
 
-	# 2) Живописные бордюры вдоль лесных и садовых тропинок (папоротник + цветущая кислица + низкий кустарник + дернина)
 	for chain in TerrainBuilder.FOOTPATH_CHAINS:
 		for seg_i in range(chain.size() - 1):
 			var p_a: Vector2 = chain[seg_i]
@@ -2019,7 +2500,6 @@ static func _build_photoscanned_undergrowth(
 						sorrel_xf.append(Transform3D(Basis(Vector3.UP, rng.randf() * TAU).scaled(Vector3.ONE * rng.randf_range(2.10, 2.75)), Vector3(s_off.x, TerrainBuilder.get_height(s_off.x, s_off.y) - 0.01, s_off.y)))
 				bermuda_xf.append(Transform3D(Basis(Vector3.UP, rng.randf() * TAU).scaled(Vector3.ONE * rng.randf_range(1.0, 1.42)), Vector3(anchor.x, ay - 0.01, anchor.y)))
 
-	# 3) Фоновое заполнение лесного покрова папоротниками и кислицей
 	for _i in range(2400):
 		var fx := rng.randf_range(-84.0, 86.0)
 		var fz := rng.randf_range(-85.0, 85.0)
@@ -2038,8 +2518,6 @@ static func _build_photoscanned_undergrowth(
 			var ssc := rng.randf_range(1.95, 2.85)
 			sorrel_xf.append(Transform3D(Basis(Vector3.UP, rng.randf() * TAU).scaled(Vector3(ssc, ssc, ssc)), Vector3(fx, fy - 0.01, fz)))
 
-	# 4) Живописные ЛУГОВЫЕ КУРТИНЫ на открытых полянах (цветущие кусты + кочки овсяницы + одуванчики + чистотел + мшистые валуны!)
-	var meadow_boulders := AssetCatalog.get_model_submeshes("res://assets/downloaded/models/boulder_01/model.gltf")
 	var meadow_stone_xf: Array[Transform3D] = []
 	for _mi in range(360):
 		var ix := rng.randf_range(-83.5, 80.0)
@@ -2065,7 +2543,6 @@ static func _build_photoscanned_undergrowth(
 			var sc_w := rng.randf_range(2.8, 4.2)
 			(shrub_buckets[4] as Array).append(Transform3D(Basis(Vector3.UP, rng.randf() * TAU).scaled(Vector3.ONE * sc_w), Vector3(ix, iy - 0.04, iz)))
 
-		# Низкий подбой куртины (shrub_04 + сиреневый барвинок + одуванчики + чистотел + кислица + пышные кочки овсяницы)
 		var sub_cnt := rng.randi_range(2, 3)
 		for sb_i in range(sub_cnt):
 			var sa := rng.randf() * TAU
@@ -2104,35 +2581,6 @@ static func _build_photoscanned_undergrowth(
 				Vector3(st_p.x, TerrainBuilder.get_height(st_p.x, st_p.y) - 0.10, st_p.y)
 			))
 
-	if not shrub1.is_empty() and not (shrub_buckets[0] as Array).is_empty():
-		_add_multimesh_batch(parent, "Shrubs_FloweringHero", shrub1[0], shrub_buckets[0], 110.0, true, 34.0)
-	if not shrub2.is_empty() and not (shrub_buckets[1] as Array).is_empty():
-		_add_multimesh_batch(parent, "Shrubs_Large", shrub2[0], shrub_buckets[1], 115.0, true, 36.0)
-	if not shrub3.is_empty() and not (shrub_buckets[2] as Array).is_empty():
-		_add_multimesh_batch(parent, "Shrubs_Mid", shrub3[0], shrub_buckets[2], 95.0, true, 36.0)
-	if not shrub4.is_empty() and not (shrub_buckets[3] as Array).is_empty():
-		_add_multimesh_batch(parent, "Shrubs_Low", shrub4[0], shrub_buckets[3], 90.0, true, 36.0)
-	if not weed_bush.is_empty() and not (shrub_buckets[4] as Array).is_empty():
-		_add_multimesh_batch(parent, "Shrubs_WildBurdock", weed_bush[0], shrub_buckets[4], 82.0, false, 34.0)
-	if not periwinkle.is_empty() and not periwinkle_xf.is_empty():
-		_add_multimesh_batch(parent, "Shrubs_GardenPeriwinkle", periwinkle[0], periwinkle_xf, 88.0, true, 32.0)
-	if not nettles.is_empty() and not nettle_xf.is_empty():
-		_add_multimesh_batch(parent, "PhotoscannedNettles", nettles[0], nettle_xf, 70.0, false, 34.0)
-	if not celandines.is_empty() and not celandine_xf.is_empty():
-		_add_multimesh_batch(parent, "PhotoscannedCelandine", celandines[0], celandine_xf, 68.0, false, 34.0)
-	if not dandelions.is_empty():
-		if not dandelion_hero_xf.is_empty():
-			_add_multimesh_batch(parent, "PhotoscannedDandelionsHero", dandelions[0], dandelion_hero_xf, 66.0, false, 28.0)
-		if dandelions.size() > 2 and not dandelion_mid_xf.is_empty():
-			_add_multimesh_batch(parent, "PhotoscannedDandelionsMeadow", dandelions[2], dandelion_mid_xf, 68.0, false, 32.0)
-	if not meadow_boulders.is_empty() and not meadow_stone_xf.is_empty():
-		_add_multimesh_batch(parent, "MeadowFieldstones", meadow_boulders[0], meadow_stone_xf, 95.0, true, 36.0)
-
-	if not ferns.is_empty() and not fern_xf.is_empty():
-		_add_multimesh_batch(parent, "PhotoscannedFerns", ferns[0], fern_xf, 76.0, false, 34.0)
-	if not sorrel.is_empty() and not sorrel_xf.is_empty():
-		_add_multimesh_batch(parent, "PhotoscannedWoodSorrel", sorrel[0], sorrel_xf, 64.0, false, 32.0)
-
 	# Г) 3 фотосканированных вида травы: крупные кочки овсяницы (grass_medium_01_large 4.6k!),
 	#    луговые куртины (grass_medium_02) и густая дернина с метёлками (grass_bermuda_01)
 	for _i in range(6800):
@@ -2144,7 +2592,6 @@ static func _build_photoscanned_undergrowth(
 			continue
 		var gy := TerrainBuilder.get_height(gx, gz)
 		var ff_g := TerrainBuilder.get_forest_factor(gx, gz)
-		# Под густым пологом леса оставляем чистую хвойно-лиственную подстилку с папоротниками и мхом (без сплошного газона!)
 		if ff_g > 0.45 and rng.randf() < 0.68:
 			continue
 		if pd < 2.6 or rd < 5.2 or Vector2(gx, gz).distance_to(Vector2(14.0, -4.0)) < 9.5:
@@ -2157,21 +2604,123 @@ static func _build_photoscanned_undergrowth(
 			var g2sc := rng.randf_range(1.9, 3.2)
 			gm2_xf.append(Transform3D(Basis(Vector3.UP, rng.randf() * TAU).scaled(Vector3(g2sc, g2sc, g2sc)), Vector3(gx, gy, gz)))
 
-	if not grass_m1.is_empty() and not gm1_xf.is_empty():
-		_add_multimesh_batch(parent, "PhotoscannedFescueClumps", grass_m1[0], gm1_xf, 68.0, false, 30.0)
-	if not grass_m2.is_empty() and not gm2_xf.is_empty():
-		_add_multimesh_batch(parent, "PhotoscannedGrassClumps", grass_m2[0], gm2_xf, 66.0, false, 32.0)
-	if not grass_bermuda.is_empty() and not bermuda_xf.is_empty():
-		_add_multimesh_batch(parent, "PhotoscannedTurfSeedheads", grass_bermuda[0], bermuda_xf, 60.0, false, 30.0)
+	state["shrub_buckets"] = shrub_buckets
+	state["periwinkle_xf"] = periwinkle_xf
+	state["nettle_xf"] = nettle_xf
+	state["celandine_xf"] = celandine_xf
+	state["dandelion_hero_xf"] = dandelion_hero_xf
+	state["dandelion_mid_xf"] = dandelion_mid_xf
+	state["meadow_stone_xf"] = meadow_stone_xf
+	state["fern_xf"] = fern_xf
+	state["sorrel_xf"] = sorrel_xf
+	state["gm1_xf"] = gm1_xf
+	state["gm2_xf"] = gm2_xf
+	state["bermuda_xf"] = bermuda_xf
+
+
+static func _collect_undergrowth_batch_specs(state: Dictionary) -> Array:
+	var shrub1 := AssetCatalog.get_model_submeshes("res://assets/downloaded/models/shrub_01/model.gltf")
+	var shrub2 := AssetCatalog.get_model_submeshes("res://assets/downloaded/models/shrub_02/model.gltf")
+	var shrub3 := AssetCatalog.get_model_submeshes("res://assets/downloaded/models/shrub_03/model.gltf")
+	var shrub4 := AssetCatalog.get_model_submeshes("res://assets/downloaded/models/shrub_04/model.gltf")
+	var periwinkle := AssetCatalog.get_model_submeshes("res://assets/downloaded/models/periwinkle_plant/model.gltf")
+	var weed_bush := AssetCatalog.get_model_submeshes("res://assets/downloaded/models/weed_plant_02/model.gltf")
+	var sorrel := AssetCatalog.get_model_submeshes("res://assets/downloaded/models/shrub_sorrel_01/model.gltf")
+	var nettles := AssetCatalog.get_model_submeshes("res://assets/downloaded/models/nettle_plant/model.gltf")
+	var celandines := AssetCatalog.get_model_submeshes("res://assets/downloaded/models/celandine_01/model.gltf")
+	var dandelions := AssetCatalog.get_model_submeshes("res://assets/downloaded/models/dandelion_01/model.gltf")
+	var ferns := AssetCatalog.get_model_submeshes("res://assets/downloaded/models/fern_02/model.gltf")
+	var grass_m1 := AssetCatalog.get_model_submeshes("res://assets/downloaded/models/grass_medium_01/model.gltf")
+	var grass_m2 := AssetCatalog.get_model_submeshes("res://assets/downloaded/models/grass_medium_02/model.gltf")
+	var grass_bermuda := AssetCatalog.get_model_submeshes("res://assets/downloaded/models/grass_bermuda_01/model.gltf")
+	var meadow_boulders := AssetCatalog.get_model_submeshes("res://assets/downloaded/models/boulder_01/model.gltf")
+
+	var shrub_buckets: Array = state["shrub_buckets"]
+	var specs: Array = []
+	if not shrub1.is_empty():
+		specs.append(["Shrubs_FloweringHero", shrub1[0], shrub_buckets[0], 110.0, true, 34.0])
+	if not shrub2.is_empty():
+		specs.append(["Shrubs_Large", shrub2[0], shrub_buckets[1], 115.0, true, 36.0])
+	if not shrub3.is_empty():
+		specs.append(["Shrubs_Mid", shrub3[0], shrub_buckets[2], 95.0, true, 36.0])
+	if not shrub4.is_empty():
+		specs.append(["Shrubs_Low", shrub4[0], shrub_buckets[3], 90.0, true, 36.0])
+	if not weed_bush.is_empty():
+		specs.append(["Shrubs_WildBurdock", weed_bush[0], shrub_buckets[4], 82.0, false, 34.0])
+	if not periwinkle.is_empty():
+		specs.append(["Shrubs_GardenPeriwinkle", periwinkle[0], state["periwinkle_xf"], 88.0, true, 32.0])
+	if not nettles.is_empty():
+		specs.append(["PhotoscannedNettles", nettles[0], state["nettle_xf"], 70.0, false, 34.0])
+	if not celandines.is_empty():
+		specs.append(["PhotoscannedCelandine", celandines[0], state["celandine_xf"], 68.0, false, 34.0])
+	if not dandelions.is_empty():
+		specs.append(["PhotoscannedDandelionsHero", dandelions[0], state["dandelion_hero_xf"], 66.0, false, 28.0])
+		if dandelions.size() > 2:
+			specs.append(["PhotoscannedDandelionsMeadow", dandelions[2], state["dandelion_mid_xf"], 68.0, false, 32.0])
+	if not meadow_boulders.is_empty():
+		specs.append(["MeadowFieldstones", meadow_boulders[0], state["meadow_stone_xf"], 95.0, true, 36.0])
+	if not ferns.is_empty():
+		specs.append(["PhotoscannedFerns", ferns[0], state["fern_xf"], 76.0, false, 34.0])
+	if not sorrel.is_empty():
+		specs.append(["PhotoscannedWoodSorrel", sorrel[0], state["sorrel_xf"], 64.0, false, 32.0])
+	if not grass_m1.is_empty():
+		specs.append(["PhotoscannedFescueClumps", grass_m1[0], state["gm1_xf"], 68.0, false, 30.0])
+	if not grass_m2.is_empty():
+		specs.append(["PhotoscannedGrassClumps", grass_m2[0], state["gm2_xf"], 66.0, false, 32.0])
+	if not grass_bermuda.is_empty():
+		specs.append(["PhotoscannedTurfSeedheads", grass_bermuda[0], state["bermuda_xf"], 60.0, false, 30.0])
+	return specs
+
+
+static func _build_photoscanned_undergrowth(
+	parent: Node3D,
+	rng: RandomNumberGenerator,
+	placed_trees: Array[Vector2] = []
+) -> void:
+	var state := {"rng_seed": int(rng.randi()), "placed_trees": placed_trees.duplicate()}
+	_worker_compute_undergrowth_transforms(state)
+	for sp in _collect_undergrowth_batch_specs(state):
+		var xf_arr: Array = sp[2]
+		if not xf_arr.is_empty():
+			_add_multimesh_batch(parent, String(sp[0]), sp[1], xf_arr, float(sp[3]), bool(sp[4]), float(sp[5]))
+
+
+static func _build_photoscanned_undergrowth_async(
+	parent: Node3D,
+	rng: RandomNumberGenerator,
+	placed_trees: Array[Vector2],
+	tree: SceneTree,
+	progress_cb: Callable = Callable()
+) -> void:
+	var state := {"rng_seed": int(rng.randi()), "placed_trees": placed_trees.duplicate()}
+	var tid := WorkerThreadPool.add_task(_worker_compute_undergrowth_transforms.bind(state))
+	while not WorkerThreadPool.is_task_completed(tid):
+		await tree.process_frame
+	WorkerThreadPool.wait_for_task_completion(tid)
+	if progress_cb.is_valid():
+		progress_cb.call(0.45)
+
+	var specs := _collect_undergrowth_batch_specs(state)
+	var frame_t := Time.get_ticks_msec()
+	for idx in range(specs.size()):
+		var sp: Array = specs[idx]
+		var xf_arr: Array = sp[2]
+		if not xf_arr.is_empty():
+			_add_multimesh_batch(parent, String(sp[0]), sp[1], xf_arr, float(sp[3]), bool(sp[4]), float(sp[5]))
+		if progress_cb.is_valid():
+			progress_cb.call(lerpf(0.45, 1.0, float(idx + 1) / float(maxi(1, specs.size()))))
+		if Time.get_ticks_msec() - frame_t >= 14:
+			await tree.process_frame
+			frame_t = Time.get_ticks_msec()
 
 
 # ============================================================================
 # 3. АВГУСТОВСКИЙ ЛУГ — 56 000+ ПУЧКОВ СОЧНОЙ ТРАВЫ + ГУСТЫЕ КУРТИНЫ ЗОЛОТИСТЫХ КОЛОСЬЕВ (Foliage003)
 # ============================================================================
 
-static func _build_gpu_meadow_grass(parent: Node3D, rng: RandomNumberGenerator) -> void:
-	var tuft_mesh := _create_curved_grass_tuft_mesh()
-	var stalks_mesh := _create_meadow_seed_stalks_mesh()
+static func _worker_compute_meadow_transforms(state: Dictionary) -> void:
+	var rng := RandomNumberGenerator.new()
+	rng.seed = int(state["rng_seed"])
 	var grass_xforms: Array[Transform3D] = []
 	var stalk_xforms: Array[Transform3D] = []
 
@@ -2184,8 +2733,6 @@ static func _build_gpu_meadow_grass(parent: Node3D, rng: RandomNumberGenerator) 
 			continue
 		if TerrainBuilder.is_inside_building_footprint(gx, gz, 0.45):
 			continue
-		# В лесу, перелесках и у тропинок НЕ спавним процедурные треугольные травинки —
-		# там видна чёткая лесная подстилка forest_leaves_02 с веточками и настоящие 3D-фотосканы!
 		if weights.b > 0.14 or TerrainBuilder.get_forest_factor(gx, gz) > 0.18:
 			continue
 		if TerrainBuilder.get_footpath_distance(gx, gz) < 2.2 or TerrainBuilder.get_road_distance(gx, gz) < 4.2:
@@ -2201,8 +2748,6 @@ static func _build_gpu_meadow_grass(parent: Node3D, rng: RandomNumberGenerator) 
 			Vector3(gx, gy - 0.02, gz)
 		))
 
-	# Светло-соломенные колосья растут естественными группами по 7–13 стройных пучков на солнечных лугах,
-	# мягко и натурально выделяясь светлой сухой соломой на фоне тёмно-зелёной травы без рыжего/оранжевого оттенка
 	for _patch in range(235):
 		var cx := rng.randf_range(-85.0, 82.0)
 		var cz := rng.randf_range(-85.0, 85.0)
@@ -2240,8 +2785,43 @@ static func _build_gpu_meadow_grass(parent: Node3D, rng: RandomNumberGenerator) 
 			var b := (Basis.from_euler(tilt) * Basis(Vector3.UP, rng.randf() * TAU)).scaled(Vector3(center_boost, center_boost, center_boost))
 			stalk_xforms.append(Transform3D(b, Vector3(sx, sy - 0.04, sz)))
 
-	_add_multimesh_batch(parent, "MeadowGrass", tuft_mesh, grass_xforms, 68.0, false, 30.0)
-	_add_multimesh_batch(parent, "MeadowSeedStalks", stalks_mesh, stalk_xforms, 78.0, false, 30.0)
+	state["grass_xforms"] = grass_xforms
+	state["stalk_xforms"] = stalk_xforms
+
+
+static func _build_gpu_meadow_grass(parent: Node3D, rng: RandomNumberGenerator) -> void:
+	var tuft_mesh := _create_curved_grass_tuft_mesh()
+	var stalks_mesh := _create_meadow_seed_stalks_mesh()
+	var state := {"rng_seed": int(rng.randi())}
+	_worker_compute_meadow_transforms(state)
+	_add_multimesh_batch(parent, "MeadowGrass", tuft_mesh, state["grass_xforms"], 68.0, false, 30.0)
+	_add_multimesh_batch(parent, "MeadowSeedStalks", stalks_mesh, state["stalk_xforms"], 78.0, false, 30.0)
+
+
+static func _build_gpu_meadow_grass_async(
+	parent: Node3D,
+	rng: RandomNumberGenerator,
+	tree: SceneTree,
+	progress_cb: Callable = Callable()
+) -> void:
+	var state := {"rng_seed": int(rng.randi())}
+	var tid := WorkerThreadPool.add_task(_worker_compute_meadow_transforms.bind(state))
+	var tuft_mesh := _create_curved_grass_tuft_mesh()
+	var stalks_mesh := _create_meadow_seed_stalks_mesh()
+	while not WorkerThreadPool.is_task_completed(tid):
+		await tree.process_frame
+	WorkerThreadPool.wait_for_task_completion(tid)
+	if progress_cb.is_valid():
+		progress_cb.call(0.65)
+	await tree.process_frame
+	_add_multimesh_batch(parent, "MeadowGrass", tuft_mesh, state["grass_xforms"], 68.0, false, 30.0)
+	if progress_cb.is_valid():
+		progress_cb.call(0.88)
+	await tree.process_frame
+	_add_multimesh_batch(parent, "MeadowSeedStalks", stalks_mesh, state["stalk_xforms"], 78.0, false, 30.0)
+	if progress_cb.is_valid():
+		progress_cb.call(1.0)
+	await tree.process_frame
 
 
 static func _is_inside_homestead_yard(x: float, z: float, extra_margin: float = 1.0) -> bool:
@@ -2358,16 +2938,9 @@ static func _extract_golden_panicle_stamp(
 	return out
 
 
-static func _get_meadow_stalk_sheaf_texture() -> Texture2D:
-	if _meadow_stalk_sheaf_tex != null:
-		return _meadow_stalk_sheaf_tex
-	var rm := _get_spray_res_mult()
+static func _build_stalks_atlas_image(d_img: Image, a_img: Image, rm: int) -> Image:
 	var m := float(rm)
 	var bleed := Color(0.46, 0.44, 0.27, 0.0)
-	var d_img := _load_image_any("res://assets/downloaded/textures/meadow_stalks/diff.jpg")
-	var a_img := _load_image_any("res://assets/downloaded/textures/meadow_stalks/alpha.jpg")
-
-	# Воздушный ажурный пучок из реальных фотосканированных метёлок луговых злаков (ambientCG Foliage003)
 	var pan_a := _extract_golden_panicle_stamp(d_img, a_img, Rect2(0.198, 0.132, 0.322, 0.680), 290 * rm, 720 * rm, bleed)
 	var pan_b := _extract_golden_panicle_stamp(d_img, a_img, Rect2(0.520, 0.132, 0.232, 0.675), 240 * rm, 710 * rm, bleed)
 	var pan_c := _extract_golden_panicle_stamp(d_img, a_img, Rect2(0.734, 0.148, 0.242, 0.675), 260 * rm, 720 * rm, bleed)
@@ -2394,8 +2967,11 @@ static func _get_meadow_stalk_sheaf_texture() -> Texture2D:
 		_stamp_centered(canvas, spec[1], Vector2i(int(pt.x), int(pt.y)))
 
 	canvas.generate_mipmaps()
-	_meadow_stalk_sheaf_tex = ImageTexture.create_from_image(canvas)
-	return _meadow_stalk_sheaf_tex
+	return canvas
+
+
+static func _get_meadow_stalk_sheaf_texture() -> Texture2D:
+	return _get_or_build_atlas_sync("stalks")
 
 
 static func _create_curved_grass_tuft_mesh() -> ArrayMesh:

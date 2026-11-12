@@ -33,6 +33,61 @@ static func build_all(parent: Node3D, rng: RandomNumberGenerator) -> void:
 	_build_airtight_outer_perimeter(root, rng)
 
 
+static func build_all_async(
+	parent: Node3D,
+	rng: RandomNumberGenerator,
+	tree: SceneTree,
+	progress_cb: Callable = Callable()
+) -> void:
+	var root := Node3D.new()
+	root.name = "EasternEuropeanVillage"
+	parent.add_child(root)
+
+	var total_steps := TerrainBuilder.HOUSE_PLOTS.size() + 3
+	var step_idx := 0
+	var frame_t := Time.get_ticks_msec()
+
+	for plot in TerrainBuilder.HOUSE_PLOTS:
+		var style := String(plot["style"])
+		var c: Vector2 = plot["pos"]
+		var yaw: float = float(plot["yaw"])
+		var ground_y := TerrainBuilder.get_height(c.x, c.y)
+		var house_pos := Vector3(c.x, ground_y, c.y)
+
+		if style == "forester_hut":
+			_build_forester_cabin(root, house_pos, yaw)
+		else:
+			_build_enterable_village_house(root, house_pos, yaw, style, rng)
+			_build_homestead_yard(root, house_pos, yaw, style, rng)
+
+		step_idx += 1
+		if progress_cb.is_valid():
+			progress_cb.call(float(step_idx) / float(total_steps))
+		if Time.get_ticks_msec() - frame_t >= 14:
+			await tree.process_frame
+			frame_t = Time.get_ticks_msec()
+
+	_build_village_well(root, Vector3(-15.0, TerrainBuilder.get_height(-15.0, -6.0), -6.0))
+	_build_campfire_glade_seating(root, Vector3(14.0, TerrainBuilder.get_height(14.0, -4.0), -4.0))
+	_build_forest_boulder_glade(root, Vector3(45.0, TerrainBuilder.get_height(45.0, 42.0), 42.0), rng)
+	step_idx += 1
+	if progress_cb.is_valid():
+		progress_cb.call(float(step_idx) / float(total_steps))
+	await tree.process_frame
+
+	_build_power_line_and_streetlamps(root)
+	step_idx += 1
+	if progress_cb.is_valid():
+		progress_cb.call(float(step_idx) / float(total_steps))
+	await tree.process_frame
+
+	_build_airtight_outer_perimeter(root, rng)
+	step_idx += 1
+	if progress_cb.is_valid():
+		progress_cb.call(1.0)
+	await tree.process_frame
+
+
 # ============================================================================
 # 1. ОТКРЫТЫЕ СЕЛЬСКИЕ ДОМА С ИНТЕРЬЕРОМ, ОКНАМИ, КРЫЛЬЦОМ И ДВУСКАТНОЙ КРЫШЕЙ
 # ============================================================================

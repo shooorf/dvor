@@ -354,9 +354,24 @@ func _build_shrub01_cluster_mesh(src_mesh: Mesh) -> ArrayMesh:
 		return null
 	var arrays := src_mesh.surface_get_arrays(0).duplicate(true)
 	var verts: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
-	var nrms: PackedVector3Array = arrays[Mesh.ARRAY_NORMAL]
 	if verts.is_empty():
 		return null
+
+	var state := {"arrays": arrays}
+	_worker_transform_shrub01_arrays(state)
+
+	var out_mesh := ArrayMesh.new()
+	out_mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, state["arrays"])
+	var mat := src_mesh.surface_get_material(0)
+	if mat != null:
+		out_mesh.surface_set_material(0, mat)
+	return out_mesh
+
+
+static func _worker_transform_shrub01_arrays(state: Dictionary) -> void:
+	var arrays: Array = state["arrays"]
+	var verts: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+	var nrms: PackedVector3Array = arrays[Mesh.ARRAY_NORMAL]
 
 	const CUTS: Array[float] = [-2.19, -1.77, -1.44, -1.20, -1.00, -0.75, -0.45, -0.15]
 	const CENTERS: Array[float] = [-2.37, -1.99, -1.60, -1.30, -1.10, -0.88, -0.60, -0.29, 0.02]
@@ -389,13 +404,7 @@ func _build_shrub01_cluster_mesh(src_mesh: Mesh) -> ArrayMesh:
 	arrays[Mesh.ARRAY_VERTEX] = verts
 	if has_nrms:
 		arrays[Mesh.ARRAY_NORMAL] = nrms
-
-	var out_mesh := ArrayMesh.new()
-	out_mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
-	var mat := src_mesh.surface_get_material(0)
-	if mat != null:
-		out_mesh.surface_set_material(0, mat)
-	return out_mesh
+	state["arrays"] = arrays
 
 
 func _build_ground_patch_mesh(
@@ -579,7 +588,12 @@ func _load_texture_safe(res_path: String) -> Texture2D:
 	if _texture_cache.has(res_path):
 		return _texture_cache[res_path]
 	if ResourceLoader.exists(res_path):
-		var res := load(res_path)
+		var res: Resource = null
+		var th_st := ResourceLoader.load_threaded_get_status(res_path)
+		if th_st == ResourceLoader.THREAD_LOAD_LOADED or th_st == ResourceLoader.THREAD_LOAD_IN_PROGRESS:
+			res = ResourceLoader.load_threaded_get(res_path)
+		else:
+			res = load(res_path)
 		if res is Texture2D:
 			var tex := res as Texture2D
 			if not tex.has_mipmaps() and not res_path.ends_with(".hdr"):
@@ -609,7 +623,12 @@ func _load_scene_safe(res_path: String) -> PackedScene:
 		return _scene_cache[res_path]
 	var loaded_ps: PackedScene = null
 	if ResourceLoader.exists(res_path):
-		var res := load(res_path)
+		var res: Resource = null
+		var th_st := ResourceLoader.load_threaded_get_status(res_path)
+		if th_st == ResourceLoader.THREAD_LOAD_LOADED or th_st == ResourceLoader.THREAD_LOAD_IN_PROGRESS:
+			res = ResourceLoader.load_threaded_get(res_path)
+		else:
+			res = load(res_path)
 		if res is PackedScene:
 			loaded_ps = res as PackedScene
 	if loaded_ps == null:
@@ -688,20 +707,372 @@ func _upgrade_scene_alpha_materials(res_path: String, ps: PackedScene) -> Packed
 		for ch in cur.get_children():
 			queue.append(ch)
 
-	if modified:
-		var new_ps := PackedScene.new()
-		if new_ps.pack(inst) == OK:
-			inst.free()
-			return new_ps
+	# surface_set_material мутирует общий ресурс Mesh прямо внутри SceneState у PackedScene,
+	# поэтому перепаковывать 150k-полигональные сцены через PackedScene.pack() не требуется!
 	inst.free()
 	return ps
 
 
 func _find_model_texture(model_dir: String, model_id: String, map_suffix: String) -> Texture2D:
+	var p := _find_model_texture_path(model_dir, model_id, map_suffix)
+	if not p.is_empty():
+		return _load_texture_safe(p)
+	return null
+
+
+func _find_model_texture_path(model_dir: String, model_id: String, map_suffix: String) -> String:
 	for sub_prefix in ["", "_twigs", "_twig", "_leaves", "_leaf"]:
 		for res_tag in ["4k", "2k", "1k"]:
 			for ext in ["jpg", "png"]:
 				var candidate := "%s/textures/%s%s_%s_%s.%s" % [model_dir, model_id, sub_prefix, map_suffix, res_tag, ext]
 				if ResourceLoader.exists(candidate) or FileAccess.file_exists(ProjectSettings.globalize_path(candidate)):
-					return _load_texture_safe(candidate)
-	return null
+					return candidate
+	return ""
+
+
+# ============================================================================
+# АСИНХРОННАЯ МНОГОПОТОЧНАЯ ПОДГРУЗКА АССЕТОВ (ResourceLoader + WorkerThreadPool)
+# ============================================================================
+
+func _append_unique_path(list: Array[String], seen: Dictionary, p: String) -> void:
+	if p.is_empty() or seen.has(p):
+		return
+	if ResourceLoader.exists(p) or FileAccess.file_exists(ProjectSettings.globalize_path(p)):
+		seen[p] = true
+		list.append(p)
+
+
+func _collect_pbr_triplet_paths(list: Array[String], seen: Dictionary, folder: String) -> void:
+	var base := "res://assets/downloaded/textures/%s" % folder
+	_append_unique_path(list, seen, "%s/diff.jpg" % base)
+	_append_unique_path(list, seen, "%s/nor_gl.jpg" % base)
+	_append_unique_path(list, seen, "%s/arm.jpg" % base)
+
+
+func _collect_model_aux_textures(list: Array[String], seen: Dictionary, model_path: String) -> void:
+	var model_dir := model_path.get_base_dir()
+	var model_id := model_dir.get_file()
+	_append_unique_path(list, seen, "%s/textures/alpha.jpg" % model_dir)
+	_append_unique_path(list, seen, "%s/textures/alpha.png" % model_dir)
+	for suf in ["diff", "nor_gl", "arm"]:
+		var tp := _find_model_texture_path(model_dir, model_id, suf)
+		_append_unique_path(list, seen, tp)
+
+
+func get_menu_hero_preload_paths() -> PackedStringArray:
+	var out: Array[String] = []
+	var seen: Dictionary = {}
+	var models := [
+		"res://assets/downloaded/characters/Knight.glb",
+		"res://assets/downloaded/characters/Barbarian.glb",
+		"res://assets/downloaded/characters/Rogue_Hooded.glb",
+		"res://assets/downloaded/models/wooden_handle_saber/model.gltf",
+		"res://assets/downloaded/models/ornate_war_hammer/model.gltf",
+		"res://assets/downloaded/models/wooden_axe_02/model.gltf",
+	]
+	for mp in models:
+		_collect_model_aux_textures(out, seen, mp)
+	for mp in models:
+		_append_unique_path(out, seen, mp)
+	return PackedStringArray(out)
+
+
+func get_menu_backdrop_preload_paths() -> PackedStringArray:
+	var out: Array[String] = []
+	var seen: Dictionary = {}
+	_append_unique_path(out, seen, "res://assets/downloaded/hdri/sky.hdr")
+	for pbr_folder in [
+		"leafy_grass", "grass_path_2", "bark_willow_02", "jolcham_oak_bark_01", "trident_maple_bark",
+	]:
+		_collect_pbr_triplet_paths(out, seen, pbr_folder)
+	for fol_tex in [
+		"res://assets/downloaded/textures/fir_twig/diff.jpg",
+		"res://assets/downloaded/textures/fir_twig/alpha.jpg",
+		"res://assets/downloaded/textures/fir_twig/nor_gl.jpg",
+		"res://assets/downloaded/textures/leaf_twig/diff.jpg",
+		"res://assets/downloaded/textures/leaf_twig/alpha.jpg",
+		"res://assets/downloaded/textures/oak_leaf/diff.jpg",
+		"res://assets/downloaded/textures/oak_leaf/alpha.jpg",
+		"res://assets/downloaded/textures/maple_leaf/diff.jpg",
+		"res://assets/downloaded/textures/maple_leaf/alpha.jpg",
+		"res://assets/downloaded/textures/maple_aug_leaf/diff.jpg",
+		"res://assets/downloaded/textures/maple_aug_leaf/alpha.jpg",
+	]:
+		_append_unique_path(out, seen, fol_tex)
+	var models := [
+		"res://assets/downloaded/models/stone_fire_pit/model.gltf",
+		"res://assets/downloaded/models/painted_wooden_bench/model.gltf",
+		"res://assets/downloaded/models/fir_sapling/model.gltf",
+		"res://assets/downloaded/models/periwinkle_plant/model.gltf",
+		"res://assets/downloaded/models/shrub_01/model.gltf",
+		"res://assets/downloaded/models/nettle_plant/model.gltf",
+		"res://assets/downloaded/models/dandelion_01/model.gltf",
+		"res://assets/downloaded/models/grass_medium_01/model.gltf",
+		"res://assets/downloaded/models/grass_bermuda_01/model.gltf",
+	]
+	for mp in models:
+		_collect_model_aux_textures(out, seen, mp)
+	for mp in models:
+		_append_unique_path(out, seen, mp)
+	return PackedStringArray(out)
+
+
+func get_arena_submesh_models() -> PackedStringArray:
+	return PackedStringArray([
+		"res://assets/downloaded/models/wooden_pasture_fence/model.glb",
+		"res://assets/downloaded/models/boulder_01/model.gltf",
+		"res://assets/downloaded/models/dead_tree_trunk/model.gltf",
+		"res://assets/downloaded/models/tree_stump_01/model.gltf",
+		"res://assets/downloaded/models/dry_branches_medium_01/model.gltf",
+		"res://assets/downloaded/models/moss_01/model.gltf",
+		"res://assets/downloaded/models/fir_sapling/model.gltf",
+		"res://assets/downloaded/models/pine_sapling_small/model.gltf",
+		"res://assets/downloaded/models/shrub_01/model.gltf",
+		"res://assets/downloaded/models/shrub_02/model.gltf",
+		"res://assets/downloaded/models/shrub_03/model.gltf",
+		"res://assets/downloaded/models/shrub_04/model.gltf",
+		"res://assets/downloaded/models/periwinkle_plant/model.gltf",
+		"res://assets/downloaded/models/shrub_sorrel_01/model.gltf",
+		"res://assets/downloaded/models/fern_02/model.gltf",
+		"res://assets/downloaded/models/grass_medium_01/model.gltf",
+		"res://assets/downloaded/models/grass_medium_02/model.gltf",
+		"res://assets/downloaded/models/grass_bermuda_01/model.gltf",
+		"res://assets/downloaded/models/weed_plant_02/model.gltf",
+		"res://assets/downloaded/models/nettle_plant/model.gltf",
+		"res://assets/downloaded/models/celandine_01/model.gltf",
+		"res://assets/downloaded/models/dandelion_01/model.gltf",
+	])
+
+
+func get_arena_preload_paths() -> PackedStringArray:
+	var out: Array[String] = []
+	var seen: Dictionary = {}
+
+	_append_unique_path(out, seen, "res://assets/downloaded/hdri/sky.hdr")
+
+	for pbr_folder in [
+		"forrest_ground_01", "aerial_grass_rock", "brown_mud_leaves_01", "grass_path_2", "forest_leaves_02",
+		"bark_willow", "bark_willow_02", "knotted_pine_bark", "jolcham_oak_bark_01", "trident_maple_bark",
+		"worn_mossy_plasterwall", "brown_planks_03", "brick_wall_001", "blue_painted_planks",
+		"corrugated_iron", "green_rough_planks", "blue_plaster_weathered", "gravel_concrete_02", "metal_plate",
+	]:
+		_collect_pbr_triplet_paths(out, seen, pbr_folder)
+
+	for fol_tex in [
+		"res://assets/downloaded/textures/fir_twig/diff.jpg",
+		"res://assets/downloaded/textures/fir_twig/alpha.jpg",
+		"res://assets/downloaded/textures/fir_twig/nor_gl.jpg",
+		"res://assets/downloaded/textures/pine_twig/diff.jpg",
+		"res://assets/downloaded/textures/pine_twig/alpha.jpg",
+		"res://assets/downloaded/textures/leaf_twig/diff.jpg",
+		"res://assets/downloaded/textures/leaf_twig/alpha.jpg",
+		"res://assets/downloaded/textures/oak_leaf/diff.jpg",
+		"res://assets/downloaded/textures/oak_leaf/alpha.jpg",
+		"res://assets/downloaded/textures/maple_leaf/diff.jpg",
+		"res://assets/downloaded/textures/maple_leaf/alpha.jpg",
+		"res://assets/downloaded/textures/maple_aug_leaf/diff.jpg",
+		"res://assets/downloaded/textures/maple_aug_leaf/alpha.jpg",
+		"res://assets/downloaded/textures/aspen_leaf/diff.jpg",
+		"res://assets/downloaded/textures/aspen_leaf/alpha.jpg",
+		"res://assets/downloaded/textures/meadow_stalks/diff.jpg",
+		"res://assets/downloaded/textures/meadow_stalks/alpha.jpg",
+	]:
+		_append_unique_path(out, seen, fol_tex)
+
+	var all_models := Array(get_arena_submesh_models())
+	all_models.append_array([
+		"res://assets/downloaded/characters/Knight.glb",
+		"res://assets/downloaded/characters/Barbarian.glb",
+		"res://assets/downloaded/characters/Rogue_Hooded.glb",
+		"res://assets/downloaded/models/industrial_wall_lamp/model.gltf",
+		"res://assets/downloaded/models/painted_wooden_bench/model.gltf",
+		"res://assets/downloaded/models/wooden_picnic_table/model.gltf",
+		"res://assets/downloaded/models/wooden_ladder/model.gltf",
+		"res://assets/downloaded/models/wooden_bucket_01/model.gltf",
+		"res://assets/downloaded/models/wooden_lantern_01/model.gltf",
+		"res://assets/downloaded/models/street_lamp_01/model.gltf",
+		"res://assets/downloaded/models/stone_fire_pit/model.gltf",
+		"res://assets/downloaded/models/wooden_crate_01/model.gltf",
+		"res://assets/downloaded/models/wine_barrel_01/model.gltf",
+		"res://assets/downloaded/models/barrel_03/model.gltf",
+		"res://assets/downloaded/models/metal_jerrycan_green/model.gltf",
+		"res://assets/downloaded/models/treasure_chest/model.gltf",
+		"res://assets/downloaded/models/wooden_axe_02/model.gltf",
+		"res://assets/downloaded/models/wooden_handle_saber/model.gltf",
+		"res://assets/downloaded/models/ornate_medieval_mace/model.gltf",
+		"res://assets/downloaded/models/ornate_war_hammer/model.gltf",
+		"res://assets/downloaded/weapons/Claymore.glb",
+		"res://assets/downloaded/weapons/Club.glb",
+	])
+
+	# Сначала ставим в очередь все 4K-текстуры моделей, чтобы к моменту готовности .gltf шейдеры собирались мгновенно!
+	for mp in all_models:
+		_collect_model_aux_textures(out, seen, String(mp))
+	for mp in all_models:
+		_append_unique_path(out, seen, String(mp))
+
+	return PackedStringArray(out)
+
+
+## Неблокирующая фоновая загрузка списка ресурсов через пул потоков движка (ResourceLoader.load_threaded_request).
+func preload_resources_async(paths: PackedStringArray, progress_cb: Callable, cancel_check: Callable = Callable()) -> void:
+	var pending: Array[String] = []
+	for p in paths:
+		var is_scene := p.ends_with(".gltf") or p.ends_with(".glb") or p.ends_with(".tscn")
+		if is_scene:
+			if _scene_cache.has(p):
+				continue
+		else:
+			if _texture_cache.has(p):
+				continue
+		pending.append(p)
+
+	var total := pending.size()
+	if total == 0:
+		if progress_cb.is_valid():
+			progress_cb.call(1.0)
+		return
+
+	const MAX_IN_FLIGHT: int = 10
+	var next_idx := 0
+	var done_count := 0
+	var active: Array[String] = []
+	var prog_arr := [0.0]
+
+	while done_count < total:
+		if cancel_check.is_valid() and bool(cancel_check.call()):
+			return
+
+		while active.size() < MAX_IN_FLIGHT and next_idx < total:
+			var req_path := pending[next_idx]
+			next_idx += 1
+			if ResourceLoader.exists(req_path):
+				var cur_st := ResourceLoader.load_threaded_get_status(req_path)
+				if cur_st == ResourceLoader.THREAD_LOAD_INVALID_RESOURCE:
+					ResourceLoader.load_threaded_request(req_path)
+				active.append(req_path)
+			else:
+				# Резервный путь для неимпортированных сырых файлов
+				var is_sc := req_path.ends_with(".gltf") or req_path.ends_with(".glb")
+				if is_sc:
+					_load_scene_safe(req_path)
+				else:
+					_load_texture_safe(req_path)
+				done_count += 1
+				await get_tree().process_frame
+
+		var frame_start := Time.get_ticks_msec()
+		var partial_sum := 0.0
+		var i := 0
+		while i < active.size():
+			var ap := active[i]
+			prog_arr[0] = 0.0
+			var st := ResourceLoader.load_threaded_get_status(ap, prog_arr)
+			if st == ResourceLoader.THREAD_LOAD_LOADED:
+				# Финализируем ресурсы в рамках бюджета ~15 мс на кадр, чтобы интерфейс летал в 60 FPS!
+				if Time.get_ticks_msec() - frame_start <= 15:
+					var res := ResourceLoader.load_threaded_get(ap)
+					_store_preloaded_resource(ap, res)
+					active.remove_at(i)
+					done_count += 1
+					continue
+				else:
+					partial_sum += 1.0
+			elif st == ResourceLoader.THREAD_LOAD_IN_PROGRESS:
+				partial_sum += float(prog_arr[0])
+			else:
+				# THREAD_LOAD_FAILED или INVALID — безопасно используем синхронный fallback
+				var is_sc2 := ap.ends_with(".gltf") or ap.ends_with(".glb")
+				if is_sc2:
+					_load_scene_safe(ap)
+				else:
+					_load_texture_safe(ap)
+				active.remove_at(i)
+				done_count += 1
+				continue
+			i += 1
+
+		if progress_cb.is_valid():
+			var frac := clampf((float(done_count) + partial_sum) / float(total), 0.0, 1.0)
+			progress_cb.call(frac)
+
+		if done_count < total:
+			await get_tree().process_frame
+
+
+func _store_preloaded_resource(res_path: String, res: Resource) -> void:
+	if res == null:
+		return
+	if res is PackedScene:
+		if not _scene_cache.has(res_path):
+			_scene_cache[res_path] = _upgrade_scene_alpha_materials(res_path, res as PackedScene)
+	elif res is Texture2D:
+		if not _texture_cache.has(res_path):
+			var tex := res as Texture2D
+			if not tex.has_mipmaps() and not res_path.ends_with(".hdr"):
+				var im := tex.get_image()
+				if im != null and not im.is_empty():
+					if im.is_compressed():
+						im.decompress()
+					im.generate_mipmaps()
+					_texture_cache[res_path] = ImageTexture.create_from_image(im)
+					return
+			_texture_cache[res_path] = tex
+
+
+## Неблокирующая предсборка составных кустарников и подмешей (включая вынос 156k-полигонального shrub_01 в WorkerThreadPool).
+func warm_submesh_caches_async(model_paths: PackedStringArray, progress_cb: Callable, cancel_check: Callable = Callable()) -> void:
+	var total := model_paths.size()
+	if total == 0:
+		return
+	for idx in range(total):
+		if cancel_check.is_valid() and bool(cancel_check.call()):
+			return
+		var mp := model_paths[idx]
+		if not _submesh_cache.has(mp):
+			if "/shrub_01/" in mp:
+				await _warm_shrub01_async(mp)
+			else:
+				get_model_submeshes(mp)
+			await get_tree().process_frame
+		if progress_cb.is_valid():
+			progress_cb.call(float(idx + 1) / float(total))
+
+
+func _warm_shrub01_async(res_path: String) -> void:
+	var inst := instantiate_model(res_path)
+	if inst == null:
+		return
+	var raw_meshes: Array[Mesh] = []
+	var queue: Array[Node] = [inst]
+	while not queue.is_empty():
+		var cur: Node = queue.pop_front()
+		if cur is MeshInstance3D and (cur as MeshInstance3D).mesh != null:
+			raw_meshes.append(_bake_submesh_basis_and_materials(cur as MeshInstance3D))
+		for ch in cur.get_children():
+			queue.append(ch)
+	inst.free()
+
+	if raw_meshes.is_empty() or raw_meshes[0].get_surface_count() == 0:
+		_submesh_cache[res_path] = raw_meshes
+		return
+
+	var src_mesh := raw_meshes[0]
+	var arrays := src_mesh.surface_get_arrays(0).duplicate(true)
+	var verts: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+	if verts.is_empty():
+		_submesh_cache[res_path] = raw_meshes
+		return
+
+	var state := {"arrays": arrays}
+	var tid := WorkerThreadPool.add_task(_worker_transform_shrub01_arrays.bind(state))
+	while not WorkerThreadPool.is_task_completed(tid):
+		await get_tree().process_frame
+	WorkerThreadPool.wait_for_task_completion(tid)
+
+	var out_mesh := ArrayMesh.new()
+	out_mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, state["arrays"])
+	var mat := src_mesh.surface_get_material(0)
+	if mat != null:
+		out_mesh.surface_set_material(0, mat)
+	_submesh_cache[res_path] = [out_mesh]

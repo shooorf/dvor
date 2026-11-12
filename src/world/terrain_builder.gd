@@ -252,7 +252,7 @@ static func _build_axis_coords() -> PackedFloat32Array:
 	return coords
 
 
-static func build_terrain_node(parent: Node3D) -> StaticBody3D:
+static func _compute_terrain_arrays(state: Dictionary) -> void:
 	var axis := _build_axis_coords()
 	var vert_row := axis.size()
 	var steps := vert_row - 1
@@ -327,8 +327,13 @@ static func build_terrain_node(parent: Node3D) -> StaticBody3D:
 	arrays[Mesh.ARRAY_COLOR] = colors
 	arrays[Mesh.ARRAY_INDEX] = indices
 
+	state["arrays"] = arrays
+	state["col_faces"] = col_faces
+
+
+static func _assemble_terrain_node(parent: Node3D, state: Dictionary) -> StaticBody3D:
 	var arr_mesh := ArrayMesh.new()
-	arr_mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	arr_mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, state["arrays"])
 	arr_mesh.surface_set_material(0, _create_terrain_material())
 
 	var sb := StaticBody3D.new()
@@ -344,7 +349,47 @@ static func build_terrain_node(parent: Node3D) -> StaticBody3D:
 	var col := CollisionShape3D.new()
 	col.name = "TerrainCollider"
 	var tri_shape := ConcavePolygonShape3D.new()
-	tri_shape.set_faces(col_faces)
+	tri_shape.set_faces(state["col_faces"])
+	col.shape = tri_shape
+	sb.add_child(col)
+
+	parent.add_child(sb)
+	return sb
+
+
+static func build_terrain_node(parent: Node3D) -> StaticBody3D:
+	var state := {}
+	_compute_terrain_arrays(state)
+	return _assemble_terrain_node(parent, state)
+
+
+static func build_terrain_node_async(parent: Node3D, tree: SceneTree) -> StaticBody3D:
+	var state := {}
+	var tid := WorkerThreadPool.add_task(_compute_terrain_arrays.bind(state))
+	while not WorkerThreadPool.is_task_completed(tid):
+		await tree.process_frame
+	WorkerThreadPool.wait_for_task_completion(tid)
+	var mat := _create_terrain_material()
+	await tree.process_frame
+	var arr_mesh := ArrayMesh.new()
+	arr_mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, state["arrays"])
+	arr_mesh.surface_set_material(0, mat)
+
+	var sb := StaticBody3D.new()
+	sb.name = "SculptedVillageTerrain"
+	sb.collision_layer = 1
+	sb.collision_mask = 0
+
+	var mi := MeshInstance3D.new()
+	mi.name = "TerrainMesh"
+	mi.mesh = arr_mesh
+	sb.add_child(mi)
+
+	await tree.process_frame
+	var col := CollisionShape3D.new()
+	col.name = "TerrainCollider"
+	var tri_shape := ConcavePolygonShape3D.new()
+	tri_shape.set_faces(state["col_faces"])
 	col.shape = tri_shape
 	sb.add_child(col)
 

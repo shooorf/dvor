@@ -88,6 +88,11 @@ func _deferred_start_enet_client(clean_addr: String, port: int) -> void:
 	await get_tree().process_frame
 	if not is_joining_client:
 		return
+	var arena := get_tree().current_scene
+	if arena != null and "is_world_ready" in arena and not bool(arena.get("is_world_ready")):
+		await arena.world_ready
+	if not is_joining_client:
+		return
 	var peer := ENetMultiplayerPeer.new()
 	var err := peer.create_client(clean_addr, port)
 	if err != OK:

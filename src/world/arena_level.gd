@@ -6,6 +6,11 @@ extends Node3D
 ## По краям нет ни одного обрыва — периметр 100% замкнут заборами усадеб и непролазным лесным буреломом.
 
 const MAX_SANDBOX_ENTITIES: int = 180
+const LoadingOverlayScript = preload("res://src/ui/loading_overlay.gd")
+
+signal world_ready()
+
+var is_world_ready: bool = false
 
 var _players_root: Node3D = null
 var _entities_root: Node3D = null
@@ -14,6 +19,9 @@ var _entity_spawner: MultiplayerSpawner = null
 var _entity_seq: int = 100
 
 var _spawn_points: Array[Vector3] = []
+var _world_env: WorldEnvironment = null
+var _sun_light: DirectionalLight3D = null
+var _loading_cam: Camera3D = null
 
 
 func _ready() -> void:
@@ -25,17 +33,167 @@ func _ready() -> void:
 	_entity_spawner.spawn_function = _spawn_entity_callback
 
 	_init_spawn_points()
-	_build_environment_and_lighting()
-	_build_eastern_european_world()
+
+	# В консольном headless-режиме (автотесты) собираем синхронно без UI-оверлея
+	if DisplayServer.get_name() == "headless":
+		_build_environment_and_lighting(true)
+		_build_eastern_european_world()
+		is_world_ready = true
+		world_ready.emit()
+		var hud_h := GameHUD.new()
+		hud_h.name = "GameHUD"
+		add_child(hud_h)
+		if not NetworkManager.is_joining_client and multiplayer.is_server():
+			_server_populate_baseline_objects()
+			for pid in NetworkManager.players.keys():
+				server_ensure_player_spawned(int(pid))
+		return
+
+	# В обычной игре мгновенно (в 1-й же кадр!) рисуем отзывчивый экран загрузки с ProgressBar
+	Input.set_mouse_mode(Input.MOUSE_MODE_VISIBLE)
+	_build_environment_and_lighting(false)
+
+	_loading_cam = Camera3D.new()
+	_loading_cam.name = "LoadingCamera"
+	_loading_cam.position = Vector3(-8.0, 14.0, 26.0)
+	_loading_cam.rotation_degrees = Vector3(-16.0, -24.0, 0.0)
+	_loading_cam.current = true
+	add_child(_loading_cam)
+
+	var title_txt := "ПОДКЛЮЧЕНИЕ И ЗАГРУЗКА МИРА" if NetworkManager.is_joining_client else "ЗАГРУЗКА ОТКРЫТОГО МИРА"
+	var overlay := LoadingOverlayScript.new(title_txt)
+	add_child(overlay)
+
+	_build_world_async(overlay)
+
+
+func _is_cancelled() -> bool:
+	return not is_inside_tree()
+
+
+func _build_world_async(overlay: LoadingOverlayScript) -> void:
+	var tree := get_tree()
+	overlay.set_progress(1.0, "Инициализация сцены...")
+	await tree.process_frame
+	await tree.process_frame
+	if _is_cancelled():
+		return
+
+	# Этап 1 (2% -> 40%): Многопоточная C++ декодировка 4K PBR-текстур, HDRI и glTF-моделей
+	overlay.set_progress(2.0, "Загрузка 4K PBR-текстур и 3D-моделей...")
+	await AssetCatalog.preload_resources_async(
+		AssetCatalog.get_arena_preload_paths(),
+		func(f: float) -> void:
+			if is_instance_valid(overlay):
+				overlay.set_progress(lerpf(2.0, 40.0, f), "Загрузка 4K PBR-текстур и 3D-моделей (%d%%)..." % int(round(f * 100.0))),
+		_is_cancelled
+	)
+	if _is_cancelled():
+		return
+
+	_finalize_hdri_and_probes()
+	await tree.process_frame
+	if _is_cancelled():
+		return
+
+	# Этап 2 (40% -> 56%): Параллельная сборка / чтение из кэша атласов листвы, хвои и колосьев
+	overlay.set_progress(40.0, "Подготовка фотосканов ветвей, хвои и колосьев...")
+	await RealisticFoliage.prepare_foliage_textures_async(
+		tree,
+		PackedStringArray(),
+		func(f: float) -> void:
+			if is_instance_valid(overlay):
+				overlay.set_progress(lerpf(40.0, 56.0, f), "Подготовка фотосканов ветвей, хвои и колосьев..."),
+		_is_cancelled
+	)
+	if _is_cancelled():
+		return
+
+	# Этап 3 (56% -> 66%): Предсборка составных кустарников (включая 156k shrub_01 в WorkerThreadPool)
+	overlay.set_progress(56.0, "Сборка 3D-кустарников и лесных трав...")
+	await AssetCatalog.warm_submesh_caches_async(
+		AssetCatalog.get_arena_submesh_models(),
+		func(f: float) -> void:
+			if is_instance_valid(overlay):
+				overlay.set_progress(lerpf(56.0, 66.0, f), "Сборка 3D-кустарников и лесных трав..."),
+		_is_cancelled
+	)
+	if _is_cancelled():
+		return
+
+	var geo := Node3D.new()
+	geo.name = "StaticArchitecture"
+	add_child(geo)
+
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 20260815
+
+	# Этап 4 (66% -> 73%): Генерация скульптурного рельефа и коллайдера в WorkerThreadPool
+	overlay.set_progress(66.0, "Генерация холмов, просёлка и лесных тропинок...")
+	await TerrainBuilder.build_terrain_node_async(geo, tree)
+	if _is_cancelled():
+		return
+
+	# Этап 5 (73% -> 81%): Поэтапная постройка домов, дворов, ЛЭП и изгородей периметра
+	overlay.set_progress(73.0, "Постройка сельского посёлка, дворов и изгородей...")
+	await VillageArchitecture.build_all_async(
+		geo,
+		rng,
+		tree,
+		func(f: float) -> void:
+			if is_instance_valid(overlay):
+				overlay.set_progress(lerpf(73.0, 81.0, f), "Постройка сельского посёлка, дворов и изгородей...")
+	)
+	if _is_cancelled():
+		return
+
+	# Этап 6 (81% -> 96%): Деревья 7 пород, дремучий лес горизонта, валежник и 68 000 пучков луга
+	overlay.set_progress(81.0, "Высадка смешанного леса и августовского луга...")
+	await RealisticFoliage.populate_world_foliage_async(
+		geo,
+		rng,
+		tree,
+		func(f: float) -> void:
+			if is_instance_valid(overlay):
+				overlay.set_progress(lerpf(81.0, 96.0, f), "Высадка смешанного леса и августовского луга...")
+	)
+	if _is_cancelled():
+		return
+
+	# Геометрия и коллайдеры полностью готовы — открываем спавн и сетевое подключение!
+	is_world_ready = true
+	world_ready.emit()
 
 	var hud := GameHUD.new()
 	hud.name = "GameHUD"
 	add_child(hud)
 
 	if not NetworkManager.is_joining_client and multiplayer.is_server():
-		_server_populate_baseline_objects()
+		overlay.set_progress(97.0, "Размещение снаряжения, костров и персонажа...")
+		await _server_populate_baseline_objects_async(tree)
+		if _is_cancelled():
+			return
 		for pid in NetworkManager.players.keys():
 			server_ensure_player_spawned(int(pid))
+	elif NetworkManager.is_joining_client:
+		overlay.set_progress(97.0, "Установка сетевого соединения с сервером...")
+		while is_inside_tree() and NetworkManager.is_joining_client:
+			await tree.process_frame
+		if _is_cancelled():
+			return
+
+	overlay.set_progress(99.5, "Прогрев шейдеров кадра...")
+	await tree.process_frame
+	await tree.process_frame
+	if _is_cancelled():
+		return
+
+	if _loading_cam != null and is_instance_valid(_loading_cam):
+		_loading_cam.queue_free()
+		_loading_cam = null
+
+	if is_instance_valid(overlay):
+		overlay.fade_out_and_free(0.25)
 
 
 func _ground_pt(x: float, z: float, y_offset: float = 0.55) -> Vector3:
@@ -89,13 +247,13 @@ func _spawn_entity_callback(data: Dictionary) -> Node:
 # ОСВЕЩЕНИЕ И АТМОСФЕРА АВГУСТОВСКОГО ВЕЧЕРА (ПОД RTX 4070 FORWARD+)
 # ============================================================================
 
-func _build_environment_and_lighting() -> void:
-	var world_env := WorldEnvironment.new()
-	world_env.name = "WorldEnvironment"
+func _build_environment_and_lighting(load_hdri_immediately: bool = true) -> void:
+	_world_env = WorldEnvironment.new()
+	_world_env.name = "WorldEnvironment"
 	var env := Environment.new()
 
 	var sky := Sky.new()
-	var hdri := AssetCatalog.load_sky_hdri()
+	var hdri: Texture2D = AssetCatalog.load_sky_hdri() if load_hdri_immediately else null
 	if hdri != null:
 		var sky_mat := PanoramaSkyMaterial.new()
 		sky_mat.panorama = hdri
@@ -118,35 +276,53 @@ func _build_environment_and_lighting() -> void:
 	env.ambient_light_sky_contribution = 0.34
 	env.ambient_light_energy = 0.62
 	env.reflected_light_source = Environment.REFLECTION_SOURCE_SKY
-	world_env.environment = env
-	add_child(world_env)
+	_world_env.environment = env
+	add_child(_world_env)
 
 	# Ясное послеполуденное солнце конца августа — чёткие кружевные тени крон и кустарников на лесной подстилке
-	var sun := DirectionalLight3D.new()
-	sun.name = "SunLight"
-	sun.light_color = Color(1.0, 0.92, 0.79)
-	sun.light_energy = 1.48
-	sun.light_angular_distance = 0.25
-	sun.rotation_degrees = Vector3(-40.0, -42.0, 0.0)
-	sun.shadow_enabled = true
-	add_child(sun)
+	_sun_light = DirectionalLight3D.new()
+	_sun_light.name = "SunLight"
+	_sun_light.light_color = Color(1.0, 0.92, 0.79)
+	_sun_light.light_energy = 1.48
+	_sun_light.light_angular_distance = 0.25
+	_sun_light.rotation_degrees = Vector3(-40.0, -42.0, 0.0)
+	_sun_light.shadow_enabled = true
+	add_child(_sun_light)
 
+	if load_hdri_immediately and DisplayServer.get_name() != "headless":
+		_attach_reflection_probes()
+
+	GraphicsSettings.register_scene_lighting(env, _sun_light)
+
+
+func _finalize_hdri_and_probes() -> void:
+	if _world_env != null and _world_env.environment != null and _world_env.environment.sky != null:
+		var hdri := AssetCatalog.load_sky_hdri()
+		if hdri != null:
+			var sky_mat := PanoramaSkyMaterial.new()
+			sky_mat.panorama = hdri
+			sky_mat.energy_multiplier = 0.85
+			_world_env.environment.sky.sky_material = sky_mat
 	if DisplayServer.get_name() != "headless":
-		var probe_village := ReflectionProbe.new()
-		probe_village.name = "VillageReflectionProbe"
-		probe_village.size = Vector3(110.0, 32.0, 180.0)
-		probe_village.position = Vector3(-25.0, 8.0, 0.0)
-		probe_village.ambient_mode = ReflectionProbe.AMBIENT_DISABLED
-		add_child(probe_village)
+		_attach_reflection_probes()
 
-		var probe_forest := ReflectionProbe.new()
-		probe_forest.name = "ForestReflectionProbe"
-		probe_forest.size = Vector3(105.0, 34.0, 180.0)
-		probe_forest.position = Vector3(42.0, 9.0, 0.0)
-		probe_forest.ambient_mode = ReflectionProbe.AMBIENT_DISABLED
-		add_child(probe_forest)
 
-	GraphicsSettings.register_scene_lighting(env, sun)
+func _attach_reflection_probes() -> void:
+	if has_node("VillageReflectionProbe"):
+		return
+	var probe_village := ReflectionProbe.new()
+	probe_village.name = "VillageReflectionProbe"
+	probe_village.size = Vector3(110.0, 32.0, 180.0)
+	probe_village.position = Vector3(-25.0, 8.0, 0.0)
+	probe_village.ambient_mode = ReflectionProbe.AMBIENT_DISABLED
+	add_child(probe_village)
+
+	var probe_forest := ReflectionProbe.new()
+	probe_forest.name = "ForestReflectionProbe"
+	probe_forest.size = Vector3(105.0, 34.0, 180.0)
+	probe_forest.position = Vector3(42.0, 9.0, 0.0)
+	probe_forest.ambient_mode = ReflectionProbe.AMBIENT_DISABLED
+	add_child(probe_forest)
 
 
 # ============================================================================
@@ -182,7 +358,7 @@ func get_random_spawn_point() -> Vector3:
 
 
 func server_ensure_player_spawned(peer_id: int) -> void:
-	if not multiplayer.is_server():
+	if not multiplayer.is_server() or not is_world_ready:
 		return
 	var node_name := "Player_%d" % peer_id
 	if _players_root.has_node(node_name):
@@ -289,6 +465,20 @@ func _server_trim_entities_if_needed() -> void:
 
 
 func _server_populate_baseline_objects() -> void:
+	_server_spawn_baseline_batch_1()
+	_server_spawn_baseline_batch_2()
+
+
+func _server_populate_baseline_objects_async(tree: SceneTree) -> void:
+	_server_spawn_baseline_batch_1()
+	await tree.process_frame
+	if _is_cancelled():
+		return
+	_server_spawn_baseline_batch_2()
+	await tree.process_frame
+
+
+func _server_spawn_baseline_batch_1() -> void:
 	# 1. Главный вечерний костёр на поляне у лесной опушки (с реалистичным шейдерным пламенем и дымом)
 	server_spawn_prop("fire_pit", _ground_pt(14.0, -4.0, 0.02))
 	# Второй небольшой костёр у лесной избушки лесника
@@ -308,6 +498,8 @@ func _server_populate_baseline_objects() -> void:
 	server_spawn_world_weapon("mace_1h", _ground_pt(30.5, -13.5, 0.65))     # Развилка лесной тропы
 	server_spawn_world_weapon("club_1h", _ground_pt(-31.0, -60.0, 0.65))    # Северная околица
 
+
+func _server_spawn_baseline_batch_2() -> void:
 	# 3. Физические предметы для метания и взрывов (ящики, дубовые бочки, бочки с горючим, канистры, сундуки)
 	server_spawn_prop("wooden_crate", _ground_pt(10.4, -6.8, 0.35), 0.35)
 	server_spawn_prop("wooden_crate", _ground_pt(-16.8, -8.2, 0.35), -0.25)
